@@ -37,15 +37,6 @@ on:
         - boot
         - recovery
         - vendorboot
-      CCACHE_ENABLE:
-        description: 'Enable CCACHE (faster rebuilds)'
-        required: false
-        default: true
-        type: boolean
-      CCACHE_MAXSIZE:
-        description: 'CCACHE max size'
-        required: false
-        default: '10G'
       LDCHECK:
         description: 'Use LDCHECK'
         required: false
@@ -87,23 +78,6 @@ jobs:
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-
-    - name: Restore ccache
-      if: inputs.CCACHE_ENABLE == 'true'
-      uses: actions/cache@v4
-      with:
-        path: /tmp/ccache
-        key: ccache-twrp-${{ inputs.MANIFEST_BRANCH }}-${{ github.sha }}
-        restore-keys: |
-          ccache-twrp-${{ inputs.MANIFEST_BRANCH }}-
-          ccache-twrp-
-
-    - name: Set ccache size
-      if: inputs.CCACHE_ENABLE == 'true'
-      run: |
-        ccache -M ${{ inputs.CCACHE_MAXSIZE }}
-        ccache -o compression=true
-        echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
 
     - name: Check Manifest Branch
       run: |
@@ -208,11 +182,6 @@ jobs:
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        if [ "${{ inputs.CCACHE_ENABLE }}" == "true" ]; then
-            export USE_CCACHE=1
-            export CCACHE_EXEC=$(which ccache)
-            echo "ccache enabled — dir: $CCACHE_DIR, max: ${{ inputs.CCACHE_MAXSIZE }}"
-        fi
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
             lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
             echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
