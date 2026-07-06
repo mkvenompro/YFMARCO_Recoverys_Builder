@@ -293,6 +293,16 @@ jobs:
           link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
           echo "vendor_boot_patched.img -> $link"
         fi
+        echo "Uploading zip files..."
+        for f in $(find "${{ env.OUT_DIR }}" -maxdepth 2 -name "*.zip" -type f 2>/dev/null); do
+          if [ -f "$f" ]; then
+            fname=$(basename "$f")
+            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
+            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
+            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
+            echo "$fname -> $link"
+          fi
+        done
 
     - name: Upload to Release
       if: env.CHECK_IMG_IS_OK == 'true' && env.CHECK_ZIP_IS_OK == 'true'
