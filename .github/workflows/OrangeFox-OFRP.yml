@@ -253,7 +253,6 @@ jobs:
 
     - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
-      continue-on-error: true
       run: |
         OUTDIR=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
@@ -261,64 +260,67 @@ jobs:
         MAGISKBOOT=$(find ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }} -name "magiskboot" -type f 2>/dev/null | head -1)
         if [ -z "$MAGISKBOOT" ]; then
           mkdir -p /tmp/magisk
-          curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
           unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
             unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
-          mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
-          chmod +x /tmp/magisk/magiskboot
+          mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
           MAGISKBOOT=/tmp/magisk/magiskboot
         fi
         BUILT_VB=""
         for f in "$OUTDIR/OrangeFox-"*.img "$OUTDIR/vendor_boot.img"; do
           [ -f "$f" ] && { BUILT_VB="$f"; break; }
         done
-        if [ -f "$STOCK_VB" ] && [ -f "$STOCK_RAMDISK" ] && [ -n "$BUILT_VB" ]; then
-          WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-          mkdir -p "$WORK/built" "$WORK/stock"
-          cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB" 2>&1
-          RECOVERY=""
-          for f in vendor_ramdisk/recovery.cpio vendor_ramdisk/recovery.cpio.gz vendor_ramdisk/recovery.cpio.lz4; do
-            [ -f "$f" ] && { RECOVERY="$WORK/built/$f"; break; }
-          done
-          cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB" 2>&1
-          if [ -f vendor_ramdisk/ramdisk.cpio.lz4 ]; then
-            cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio.lz4
-          elif [ -f vendor_ramdisk/ramdisk.cpio ]; then
-            $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio 2>/dev/null || cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
-          fi
-          [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
-          cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
-          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
-          rm -rf "$WORK"
+        if [ ! -f "$STOCK_VB" ] || [ ! -f "$STOCK_RAMDISK" ] || [ -z "$BUILT_VB" ]; then
+          echo "Missing stock_vb, stock_ramdisk, or built_vb. Cannot patch."
+          exit 1
         fi
+        WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
+        mkdir -p "$WORK/built" "$WORK/stock"
+        cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB" 2>&1
+        RECOVERY=""
+        for f in vendor_ramdisk/recovery.cpio vendor_ramdisk/recovery.cpio.gz vendor_ramdisk/recovery.cpio.lz4; do
+          [ -f "$f" ] && { RECOVERY="$WORK/built/$f"; break; }
+        done
+        cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB" 2>&1
+        rm -f vendor_ramdisk/ramdisk.cpio vendor_ramdisk/ramdisk.cpio.lz4 vendor_ramdisk/ramdisk.cpio.gz
+        rm -f vendor_ramdisk/platform.cpio vendor_ramdisk/platform.cpio.lz4 vendor_ramdisk/platform.cpio.gz
+        if echo "$STOCK_RAMDISK" | grep -q '\.lz4$'; then
+          $MAGISKBOOT decompress "$STOCK_RAMDISK" /tmp/ramdisk_tmp.cpio 2>/dev/null
+          $MAGISKBOOT compress=gzip /tmp/ramdisk_tmp.cpio vendor_ramdisk/ramdisk.cpio.gz 2>/dev/null
+          rm -f /tmp/ramdisk_tmp.cpio
+        else
+          cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
+        fi
+        [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
+        cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
+        echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
+        rm -rf "$WORK"
 
     - name: Upload to gofile.io
       if: inputs.GOFILE_UPLOAD == 'true'
       run: |
+        SERVER=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
+        upload_file() {
+          local file="$1" label="$2" retries=3
+          [ -f "$file" ] || return 1
+          local response link
+          while [ $retries -gt 0 ]; do
+            response=$(curl -s -F "file=@$file" "https://$SERVER.gofile.io/uploadFile")
+            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null)
+            [ -n "$link" ] && break
+            retries=$((retries - 1))
+            sleep 2
+          done
+          echo "${label:-$(basename "$file")} -> ${link:-Upload failed}"
+        }
         for f in ${{ env.FOUND_IMGS }}; do
-          if [ -f "$f" ]; then
-            fname=$(basename "$f")
-            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
-            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-            echo "$fname -> $link"
-          fi
+          upload_file "$f"
         done
-        if [ -f "${{ env.PATCHED_VB }}" ]; then
-          server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-          response=$(curl -s -F "file=@${{ env.PATCHED_VB }}" "https://$server.gofile.io/uploadFile")
-          link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-          echo "vendor_boot_patched.img -> $link"
+        if [ -n "${{ env.PATCHED_VB }}" ]; then
+          upload_file "${{ env.PATCHED_VB }}" "vendor_boot_patched.img"
         fi
-        echo "Uploading zip files..."
         for f in $(find "${{ env.OUT_DIR }}" -maxdepth 2 -name "*.zip" -type f 2>/dev/null); do
-          if [ -f "$f" ]; then
-            fname=$(basename "$f")
-            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
-            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-            echo "$fname -> $link"
-          fi
+          upload_file "$f"
         done
 
     - name: Upload to Release
