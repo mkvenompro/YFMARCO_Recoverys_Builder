@@ -225,18 +225,31 @@ jobs:
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img ]; then
+        OUTDIR="out/target/product/${{ env.DEVICE_NAME }}"
+        IMG_FOUND=false
+        ZIP_FOUND=false
+        for pattern in "OrangeFox-*.img" "vendor_boot.img" "recovery.img" "boot.img"; do
+          for f in $(find "$OUTDIR" -maxdepth 2 -name "$pattern" -type f 2>/dev/null); do
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        else
-            echo "Recovery out directory is empty."
-        fi
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip ]; then
+            echo "MD5_IMG=$(md5sum "$f" | cut -d ' ' -f 1)" >> $GITHUB_ENV
+            echo "RELEASE_IMG=$f" >> $GITHUB_ENV
+            IMG_FOUND=true
+            break
+          done
+          $IMG_FOUND && break
+        done
+        $IMG_FOUND || echo "No image found in $OUTDIR"
+        for pattern in "OrangeFox*.zip" "*installer*.zip" "recovery*.zip"; do
+          for f in $(find "$OUTDIR" -maxdepth 2 -name "$pattern" -type f 2>/dev/null); do
             echo "CHECK_ZIP_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_ZIP=$(md5sum out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        else
-            echo "Recovery out directory is empty."
-        fi
+            echo "MD5_ZIP=$(md5sum "$f" | cut -d ' ' -f 1)" >> $GITHUB_ENV
+            echo "RELEASE_ZIP=$f" >> $GITHUB_ENV
+            ZIP_FOUND=true
+            break
+          done
+          $ZIP_FOUND && break
+        done
+        $ZIP_FOUND || echo "No zip found in $OUTDIR"
 
     - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
@@ -309,17 +322,15 @@ jobs:
         done
 
     - name: Upload to Release
-      if: env.CHECK_IMG_IS_OK == 'true' && env.CHECK_ZIP_IS_OK == 'true'
+      if: env.CHECK_IMG_IS_OK == 'true'
       continue-on-error: true
       uses: softprops/action-gh-release@v2.3.0
       with:
         files: |
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img.tar
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip
+          ${{ env.RELEASE_IMG }}
+          ${{ env.RELEASE_ZIP }}
           OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot_patched.img
           OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*installer*.zip
         name: Unofficial OrangeFox for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
         token: ${{ secrets.RECOVERY_TOKEN }}
