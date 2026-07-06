@@ -247,7 +247,10 @@ jobs:
         MAGISKBOOT=$(find ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }} -name "magiskboot" -type f 2>/dev/null | head -1)
         if [ -z "$MAGISKBOOT" ]; then
           mkdir -p /tmp/magisk
-          curl -sL -o /tmp/magisk/magiskboot https://github.com/topjohnwu/Magisk/releases/download/v27.0/magiskboot
+          curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
+            unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
+          mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
           chmod +x /tmp/magisk/magiskboot
           MAGISKBOOT=/tmp/magisk/magiskboot
         fi
