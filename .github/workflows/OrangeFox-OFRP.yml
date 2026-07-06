@@ -240,6 +240,7 @@ jobs:
 
     - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
+      continue-on-error: true
       run: |
         OUTDIR=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
@@ -309,6 +310,7 @@ jobs:
 
     - name: Upload to Release
       if: env.CHECK_IMG_IS_OK == 'true' && env.CHECK_ZIP_IS_OK == 'true'
+      continue-on-error: true
       uses: softprops/action-gh-release@v2.3.0
       with:
         files: |

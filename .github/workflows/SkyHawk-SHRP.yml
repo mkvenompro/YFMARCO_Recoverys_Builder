@@ -266,6 +266,7 @@ jobs:
 
     - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
+      continue-on-error: true
       run: |
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
@@ -331,6 +332,7 @@ jobs:
         done
 
     - name: Upload to Release
+      continue-on-error: true
       uses: softprops/action-gh-release@v2.3.0
       with:
         files: |
