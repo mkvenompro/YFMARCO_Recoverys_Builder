@@ -21,15 +21,15 @@ on:
         - twrp-5.1
         - twrp-4.4-deprecated
       DEVICE_TREE:
-        description: 'Custom Recovery Tree' # Your already made Device Tree for TWRP
+        description: 'Custom Recovery Tree'
         required: true
         default: 'https://github.com/YFMARCO-Dev/recovery_device_tree'
       DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch' # Your Device Tree Branch, make sure it's right.
+        description: 'Custom Recovery Tree Branch'
         required: true
         default: 'android-14.1'
       BUILD_TARGET:
-        description: 'Specify your Build Target' # Pick among boot, recovery and vendor_boot
+        description: 'Specify your Build Target'
         required: true
         default: 'recovery'
         type: choice
@@ -37,13 +37,27 @@ on:
         - boot
         - recovery
         - vendorboot
+      PATCH_RAMDISK:
+        description: 'Patch vendor_boot with stock ramdisk (needs prebuilt/platform_ramdisk.cpio.lz4 in device tree)'
+        required: false
+        default: false
+        type: boolean
+      STOCK_VENDOR_BOOT_URL:
+        description: 'URL to stock vendor_boot.img (required if PATCH_RAMDISK=true)'
+        required: false
+        default: ''
+      GOFILE_UPLOAD:
+        description: 'Upload results to gofile.io'
+        required: false
+        default: false
+        type: boolean
       LDCHECK:
         description: 'Use LDCHECK'
         required: false
         default: false
         type: boolean
       LDCHECKPATH:
-        description: 'Path of blobs to check' # Use it know what kind of dependencies your missing for decryption blobs.
+        description: 'Path of blobs to check'
         required: true
         default: 'system/bin/qseecomd'
 
@@ -70,6 +84,8 @@ jobs:
         echo "Device Tree: ${{ inputs.DEVICE_TREE }}"
         echo "Device Branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
         echo "Build Target: ${{ inputs.BUILD_TARGET }}image"
+        echo "PATCH_RAMDISK: ${{ inputs.PATCH_RAMDISK }}"
+        echo "GOFILE_UPLOAD: ${{ inputs.GOFILE_UPLOAD }}"
 
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
@@ -128,7 +144,6 @@ jobs:
         if [ -f external/guava/Android.bp ] && grep -q 'name:[[:space:]]*"guava"' external/guava/Android.bp; then
           echo "guava module is already available."
         else
-          echo "guava module missing after sync. Cloning fallback project..."
           rm -rf external/guava
           git clone --depth=1 https://android.googlesource.com/platform/external/guava external/guava
         fi
@@ -143,13 +158,10 @@ jobs:
     - name: Extracting variables from .mk file
       run: |
         cd android-recovery/device_tree
-        # Initialize variables
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
         DEVICE_NAME=""
-        # Loop through each .mk file in the current directory
         for file in *.mk; do
-            # Extract variables using sed
             makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
             brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
             codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
@@ -163,19 +175,24 @@ jobs:
                 break
             fi
         done
-        # Navigate to the parent directory
         cd ../
-        # Create the necessary directories
-        echo "Creating directory: $DEVICE_DIRECTORY"
         mkdir -p "$DEVICE_DIRECTORY"
-        # Move device_tree folder to device_directory and rename it to $DEVICE_NAME
-        echo "Moving device_tree to $DEVICE_DIRECTORY/$DEVICE_NAME"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
+        RAMDISK_PATH="${GITHUB_WORKSPACE}/android-recovery/${DEVICE_DIRECTORY}/${DEVICE_NAME}/prebuilt/platform_ramdisk.cpio.lz4"
+        echo "STOCK_RAMDISK_PATH=${RAMDISK_PATH}" >> $GITHUB_ENV
 
     - name: Installing python2 for legacy builds
       if: env.CHECK_LEGACY_BRANCH == 'true'
       run: |
         sudo apt-get install python2 python-is-python2
+
+    - name: Download stock vendor_boot (for ramdisk patching)
+      if: inputs.PATCH_RAMDISK == 'true' && inputs.STOCK_VENDOR_BOOT_URL != ''
+      run: |
+        URL="${{ inputs.STOCK_VENDOR_BOOT_URL }}"
+        mkdir -p /tmp/stock
+        aria2c -x 4 -s 4 "$URL" -d /tmp/stock -o vendor_boot.img
+        echo "STOCK_VENDOR_BOOT_PATH=/tmp/stock/vendor_boot.img" >> $GITHUB_ENV
 
     - name: Building Image 
       run: |
@@ -184,11 +201,27 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
             lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
-            echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
         else
             lunch ${{ env.DEVICE_MAKEFILE }}-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
-            echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
         fi
+
+    - name: Find built images
+      id: find_imgs
+      run: |
+        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
+        echo "OUT_DIR=${OUTDIR}" >> $GITHUB_ENV
+        IMGS=""
+        for pattern in "vendor_boot.img" "recovery.img" "boot.img"; do
+          for f in $(find "$OUTDIR" -maxdepth 2 -name "$pattern" -type f 2>/dev/null); do
+            IMGS="$IMGS $f"
+          done
+        done
+        if [ -z "$IMGS" ]; then
+          for f in $(find "$OUTDIR" -maxdepth 3 -name "*.img" -type f 2>/dev/null); do
+            IMGS="$IMGS $f"
+          done
+        fi
+        echo "FOUND_IMGS=${IMGS}" >> $GITHUB_ENV
 
     - name: Set build target for upload
       run: |
@@ -200,16 +233,70 @@ jobs:
            echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
 
-    - name: Set Build Date # Output will be use in Release
+    - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-      
+
+    - name: Patch vendor_boot with stock ramdisk
+      if: inputs.PATCH_RAMDISK == 'true' && env.STOCK_VENDOR_BOOT_PATH != ''
+      run: |
+        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
+        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
+        STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
+        mkdir -p /tmp/magisk
+        curl -sL -o /tmp/magisk/magiskboot https://github.com/topjohnwu/Magisk/releases/download/v27.0/magiskboot
+        chmod +x /tmp/magisk/magiskboot
+        MAGISKBOOT=/tmp/magisk/magiskboot
+        BUILT_VB=""
+        for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
+          [ -f "$f" ] && { BUILT_VB="$f"; break; }
+        done
+        if [ -f "$STOCK_VB" ] && [ -f "$STOCK_RAMDISK" ] && [ -n "$BUILT_VB" ]; then
+          WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
+          mkdir -p "$WORK/built" "$WORK/stock"
+          cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB" 2>&1
+          RECOVERY=""
+          for f in vendor_ramdisk/recovery.cpio vendor_ramdisk/recovery.cpio.gz vendor_ramdisk/recovery.cpio.lz4; do
+            [ -f "$f" ] && { RECOVERY="$WORK/built/$f"; break; }
+          done
+          cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB" 2>&1
+          if [ -f vendor_ramdisk/ramdisk.cpio.lz4 ]; then
+            cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio.lz4
+          elif [ -f vendor_ramdisk/ramdisk.cpio ]; then
+            $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio 2>/dev/null || cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
+          fi
+          [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
+          cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
+          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
+          rm -rf "$WORK"
+        fi
+
+    - name: Upload to gofile.io
+      if: inputs.GOFILE_UPLOAD == 'true'
+      run: |
+        for f in ${{ env.FOUND_IMGS }}; do
+          if [ -f "$f" ]; then
+            fname=$(basename "$f")
+            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
+            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
+            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
+            echo "$fname -> $link"
+          fi
+        done
+        if [ -f "${{ env.PATCHED_VB }}" ]; then
+          server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
+          response=$(curl -s -F "file=@${{ env.PATCHED_VB }}" "https://$server.gofile.io/uploadFile")
+          link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
+          echo "vendor_boot_patched.img -> $link"
+        fi
+
     - name: Upload to Release
       uses: softprops/action-gh-release@v2.3.0
       with:
         files: |
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/*installer*zip
+          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot_patched.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
         name: Unofficial TWRP for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
@@ -218,6 +305,7 @@ jobs:
           Build: ${{ inputs.MANIFEST_BRANCH }}
           Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
           Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
+          PATCH_RAMDISK: ${{ inputs.PATCH_RAMDISK }}
 
     - name: Run LDCheck
       if: inputs.LDCHECK == 'true'
