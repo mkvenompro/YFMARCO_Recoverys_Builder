@@ -325,6 +325,7 @@ jobs:
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/SHRP*.zip
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot_patched.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
+          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery*.zip
         name: Unofficial SHRP For ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
         token: ${{ secrets.RECOVERY_TOKEN }}
