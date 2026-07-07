@@ -283,7 +283,7 @@ jobs:
         fi
 
         WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-        mkdir -p "$WORK/patch"
+        mkdir -p "$WORK/stock" "$WORK/patch"
 
         echo "== Unpacking STOCK vendor_boot =="
         (cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB") 2>&1
