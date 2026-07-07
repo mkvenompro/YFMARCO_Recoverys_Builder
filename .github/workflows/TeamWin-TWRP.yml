@@ -37,6 +37,16 @@ on:
         - boot
         - recovery
         - vendorboot
+      RAMDISK_COMPRESSION:
+        description: 'Recovery ramdisk compression algorithm'
+        required: false
+        default: 'zstd'
+        type: choice
+        options:
+        - zstd
+        - gzip
+        - lz4
+        - xz
       PATCH_RAMDISK:
         description: 'Patch vendor_boot with stock ramdisk (needs prebuilt/platform_ramdisk.cpio.lz4 in device tree)'
         required: false
@@ -206,6 +216,14 @@ jobs:
     - name: Building Image 
       run: |
         cd android-recovery
+        # Apply compression choice
+        BOARD_MK="${GITHUB_WORKSPACE}/android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}/BoardConfig.mk"
+        if grep -q 'BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION' "$BOARD_MK"; then
+          sed -i "s/^BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION.*/BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}/" "$BOARD_MK"
+        else
+          echo "BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}" >> "$BOARD_MK"
+        fi
+        echo "Compression set to: ${{ inputs.RAMDISK_COMPRESSION }}"
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
