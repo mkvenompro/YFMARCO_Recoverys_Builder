@@ -324,7 +324,7 @@ jobs:
           [ -n "$TARGET" ] && cp /tmp/patch/platform.cpio "$TARGET"
         elif [ -n "$STOCK_CPIO" ]; then
           echo "stock has single ramdisk.cpio, concatenating platform + recovery"
-          cat /tmp/patch/platform.cpio /tmp/patch/recovery.cpio > "$STOCK_CPIO"
+          cat /tmp/patch/platform.cpio /tmp/patch/recovery.cpio | gzip -c > "$STOCK_CPIO"
         else
           echo "Could not find any ramdisk in stock vendor_boot"
           exit 1
