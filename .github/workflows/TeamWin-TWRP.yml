@@ -40,9 +40,10 @@ on:
       RAMDISK_COMPRESSION:
         description: 'Recovery ramdisk compression algorithm'
         required: false
-        default: 'zstd'
+        default: 'lz4_legacy'
         type: choice
         options:
+        - lz4_legacy
         - zstd
         - gzip
         - lz4
