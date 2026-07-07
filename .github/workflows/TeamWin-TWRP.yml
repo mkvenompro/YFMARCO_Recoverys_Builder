@@ -339,7 +339,11 @@ jobs:
           local src="$1" dst="$2"
           local ext="${dst##*.}"
           case "$ext" in
-            lz4)  $MAGISKBOOT compress=lz4 "$src" "$dst" 2>/dev/null || cp "$src" "$dst" ;;
+            lz4)  if grep -qP '^\x02\x21' "$dst" 2>/dev/null; then
+                    $MAGISKBOOT compress=lz4_legacy "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
+                  else
+                    $MAGISKBOOT compress=lz4 "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
+                  fi ;;
             gz)   gzip -9 -c "$src" > "$dst" ;;
             zst)  zstd -19 -c "$src" > "$dst" 2>/dev/null || cp "$src" "$dst" ;;
             xz)   xz -9 -c "$src" > "$dst" 2>/dev/null || cp "$src" "$dst" ;;
@@ -348,7 +352,7 @@ jobs:
                   elif grep -qP '^\x1f\x8b' "$dst" 2>/dev/null; then
                     gzip -9 -c "$src" > "$dst"
                   elif grep -qP '^\x02\x21' "$dst" 2>/dev/null; then
-                    $MAGISKBOOT compress=lz4 "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
+                    $MAGISKBOOT compress=lz4_legacy "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
                   else
                     cp "$src" "$dst"
                   fi ;;
