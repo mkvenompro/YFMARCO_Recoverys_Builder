@@ -297,10 +297,10 @@ jobs:
         find "$WORK/stock" -maxdepth 2 -type f | sort
 
         mkdir -p /tmp/patch
-        $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" /tmp/patch/platform.cpio 2>/dev/null || cp "$STOCK_RAMDISK" /tmp/patch/platform.cpio
+        $MAGISKBOOT decompress "$STOCK_RAMDISK" /tmp/patch/platform.cpio 2>/dev/null || cp "$STOCK_RAMDISK" /tmp/patch/platform.cpio
 
         if [ -n "$RECOVERY_CPIO" ]; then
-          $MAGISKBOOT decompress lz4 "$RECOVERY_CPIO" /tmp/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY_CPIO" /tmp/patch/recovery.cpio
+          $MAGISKBOOT decompress "$RECOVERY_CPIO" /tmp/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY_CPIO" /tmp/patch/recovery.cpio
           echo "Using standalone ramdisk-recovery.cpio"
         else
           mkdir -p "$WORK/built"
