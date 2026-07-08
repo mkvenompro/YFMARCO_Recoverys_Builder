@@ -368,7 +368,8 @@ jobs:
           [ -n "$STOCK_RECOVERY_FILE" ] && compress_cpio "$WORK/patch/recovery.cpio" "$STOCK_RECOVERY_FILE"
         elif [ -n "$STOCK_CPIO" ]; then
           echo "stock has single ramdisk.cpio, concatenating platform + recovery"
-          cat "$WORK/patch/platform.cpio" "$WORK/patch/recovery.cpio" | gzip -9 -c > "$STOCK_CPIO"
+          cat "$WORK/patch/platform.cpio" "$WORK/patch/recovery.cpio" > /tmp/patch/combined.cpio
+          $MAGISKBOOT compress=lz4_legacy /tmp/patch/combined.cpio "$STOCK_CPIO"
         else
           echo "Could not find any ramdisk in stock vendor_boot"
           exit 1
