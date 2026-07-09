@@ -1,0 +1,88 @@
+name: Test Patch
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test-patch:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Download stock vendor_boot
+      run: |
+        curl -sL -o stock_vendor_boot.img "https://gitlab.com/mkpromvp/Stock_room_dumb/-/raw/dump-redmi-spinel-os3.0.301.0.wpgmixm/vendor_boot.img"
+        ls -lh stock_vendor_boot.img
+
+    - name: Download TWRP built vendor_boot
+      run: |
+        curl -sL -o twrp_vendor_boot.img "https://github.com/mkvenompro/YFMARCO_Recoverys_Builder/releases/download/28981398698/vendor_boot.img"
+        ls -lh twrp_vendor_boot.img
+
+    - name: Get magiskboot
+      run: |
+        mkdir -p /tmp/magisk
+        curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
+          unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
+        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
+        chmod +x /tmp/magisk/magiskboot
+        /tmp/magisk/magiskboot 2>&1 | head -3
+
+    - name: Test patch
+      run: |
+        MAGISKBOOT=/tmp/magisk/magiskboot
+        WORK=/tmp/vb_test
+        mkdir -p $WORK/stock $WORK/twrp $WORK/patch $WORK/out
+
+        echo "== Unpack stock =="
+        (cd $WORK/stock && $MAGISKBOOT unpack /github/workspace/stock_vendor_boot.img) 2>&1
+
+        echo "== Unpack TWRP =="
+        (cd $WORK/twrp && $MAGISKBOOT unpack /github/workspace/twrp_vendor_boot.img) 2>&1
+
+        echo "== Stock vendor_ramdisk =="
+        ls -lh $WORK/stock/vendor_ramdisk/
+
+        echo "== TWRP vendor_ramdisk =="
+        ls -lh $WORK/twrp/vendor_ramdisk/
+
+        echo "== Extract TWRP recovery raw cpio =="
+        RECOVERY=$(find $WORK/twrp/vendor_ramdisk -iname "*recovery*cpio*" | head -1)
+        echo "Recovery: $RECOVERY"
+        $MAGISKBOOT decompress "$RECOVERY" $WORK/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY" $WORK/patch/recovery.cpio
+        ls -lh $WORK/patch/recovery.cpio
+
+        echo "== Find stock recovery target =="
+        STOCK_RECOVERY_FILE=$(find $WORK/stock/vendor_ramdisk -maxdepth 1 -iname "*recovery*cpio*" | head -1)
+        echo "Target: $STOCK_RECOVERY_FILE"
+
+        echo "== Compress recovery with lz4_legacy =="
+        $MAGISKBOOT compress=lz4_legacy $WORK/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>&1
+        echo "exit=$?"
+        ls -lh $WORK/stock/vendor_ramdisk/
+
+        echo "== Repack =="
+        (cd $WORK/stock && $MAGISKBOOT repack /github/workspace/stock_vendor_boot.img $WORK/out/vendor_boot_patched.img) 2>&1
+
+        echo "== Result =="
+        ls -lh $WORK/out/vendor_boot_patched.img
+
+        echo "== Check if fits 64MB =="
+        SIZE=$(stat -c%s $WORK/out/vendor_boot_patched.img)
+        echo "Size: $SIZE bytes"
+        MAX=67108864
+        if [ $SIZE -le $MAX ]; then
+          echo "OK - FITS in 64MB!"
+        else
+          echo "OVER by $((SIZE - MAX)) bytes"
+        fi
+
+    - name: Upload patched image
+      uses: actions/upload-artifact@v4
+      with:
+        name: vendor_boot_patched_test
+        path: /tmp/vb_test/out/vendor_boot_patched.img
