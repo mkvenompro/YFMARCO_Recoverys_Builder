@@ -331,10 +331,15 @@ jobs:
         STOCK_VENDOR_RAMDISK="$WORK/stock/vendor_ramdisk"
         if [ -d "$STOCK_VENDOR_RAMDISK" ]; then
           echo "stock has vendor_ramdisk/ directory"
-          TARGET=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*recovery*cpio*" | head -1)
-          [ -n "$TARGET" ] && cp /tmp/patch/recovery.cpio "$TARGET"
-          TARGET=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
-          [ -n "$TARGET" ] && cp /tmp/patch/platform.cpio "$TARGET"
+          STOCK_RAMDISK_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
+          STOCK_RECOVERY_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*recovery*cpio*" | head -1)
+
+          echo "Compressing platform with lz4_legacy..."
+          $MAGISKBOOT compress=lz4_legacy /tmp/patch/platform.cpio "$STOCK_RAMDISK_FILE" 2>/dev/null || cp /tmp/patch/platform.cpio "$STOCK_RAMDISK_FILE"
+          if [ -n "$STOCK_RECOVERY_FILE" ]; then
+            echo "Compressing recovery with lz4_legacy..."
+            $MAGISKBOOT compress=lz4_legacy /tmp/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>/dev/null || cp /tmp/patch/recovery.cpio "$STOCK_RECOVERY_FILE"
+          fi
         elif [ -n "$STOCK_CPIO" ]; then
           echo "stock has single ramdisk.cpio, concatenating platform + recovery"
           cat /tmp/patch/platform.cpio /tmp/patch/recovery.cpio > "$STOCK_CPIO"
