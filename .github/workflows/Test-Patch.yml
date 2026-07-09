@@ -22,7 +22,7 @@ jobs:
         curl -sL -o twrp_vendor_boot.img "https://github.com/mkvenompro/YFMARCO_Recoverys_Builder/releases/download/28981398698/vendor_boot.img"
         ls -lh twrp_vendor_boot.img
 
-    - name: Get magiskboot
+    - name: Get magiskboot v27
       run: |
         mkdir -p /tmp/magisk
         curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
@@ -30,58 +30,118 @@ jobs:
           unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
         mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
         chmod +x /tmp/magisk/magiskboot
-        /tmp/magisk/magiskboot 2>&1 | head -3
 
-    - name: Test patch
+    - name: Test patch logic
       run: |
         MAGISKBOOT=/tmp/magisk/magiskboot
         WORK=/tmp/vb_test
+        rm -rf $WORK
         mkdir -p $WORK/stock $WORK/twrp $WORK/patch $WORK/out
 
-        echo "== Unpack stock =="
+        set -x
+
+        echo "== 1. Unpack stock =="
         (cd $WORK/stock && $MAGISKBOOT unpack ${GITHUB_WORKSPACE}/stock_vendor_boot.img) 2>&1
 
-        echo "== Unpack TWRP =="
+        echo "== 2. Unpack TWRP =="
         (cd $WORK/twrp && $MAGISKBOOT unpack ${GITHUB_WORKSPACE}/twrp_vendor_boot.img) 2>&1
 
-        echo "== Stock vendor_ramdisk =="
-        ls -lh $WORK/stock/vendor_ramdisk/
+        echo "== 3. Check stock structure =="
+        find $WORK/stock -type f | sort
+        echo "---"
+        ls -la $WORK/stock/ramdisk.cpio 2>/dev/null && echo "has single ramdisk.cpio" || echo "no single ramdisk"
+        ls -d $WORK/stock/vendor_ramdisk 2>/dev/null && echo "has vendor_ramdisk/" || echo "no vendor_ramdisk"
 
-        echo "== TWRP vendor_ramdisk =="
-        ls -lh $WORK/twrp/vendor_ramdisk/
-
-        echo "== Extract TWRP recovery raw cpio =="
-        RECOVERY=$(find $WORK/twrp/vendor_ramdisk -iname "*recovery*cpio*" | head -1)
-        echo "Recovery: $RECOVERY"
-        $MAGISKBOOT decompress "$RECOVERY" $WORK/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY" $WORK/patch/recovery.cpio
-        ls -lh $WORK/patch/recovery.cpio
-
-        echo "== Find stock ramdisk & recovery targets =="
-        STOCK_RAMDISK_FILE=$(find $WORK/stock/vendor_ramdisk -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
-        STOCK_RECOVERY_FILE=$(find $WORK/stock/vendor_ramdisk -maxdepth 1 -iname "*recovery*cpio*" | head -1)
-        echo "Stock ramdisk target: $STOCK_RAMDISK_FILE"
-        echo "Stock recovery target: $STOCK_RECOVERY_FILE"
-
-        echo "== Compress recovery with lz4_legacy into stock =="
-        $MAGISKBOOT compress=lz4_legacy $WORK/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>&1
-        echo "exit=$?"
-        ls -lh $WORK/stock/vendor_ramdisk/
-
-        echo "== Repack =="
-        (cd $WORK/stock && $MAGISKBOOT repack ${GITHUB_WORKSPACE}/stock_vendor_boot.img $WORK/out/vendor_boot_patched.img) 2>&1
-
-        echo "== Result =="
-        ls -lh $WORK/out/vendor_boot_patched.img
-
-        echo "== Check if fits 64MB =="
-        SIZE=$(stat -c%s $WORK/out/vendor_boot_patched.img)
-        echo "Size: $SIZE bytes"
-        MAX=67108864
-        if [ $SIZE -le $MAX ]; then
-          echo "OK - FITS in 64MB!"
+        echo "== 4. Get TWRP recovery cpio =="
+        RECOVERY_CPIO=$(find $WORK/twrp -maxdepth 3 -iname "*recovery*cpio*" | head -1)
+        if [ -n "$RECOVERY_CPIO" ]; then
+          echo "Found TWRP recovery: $RECOVERY_CPIO"
+          $MAGISKBOOT decompress "$RECOVERY_CPIO" $WORK/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY_CPIO" $WORK/patch/recovery.cpio
         else
-          echo "OVER by $((SIZE - MAX)) bytes"
+          # Try to extract from TWRP ramdisk.cpio
+          echo "No recovery file found, looking for ramdisk.cpio"
+          TWRP_RAMDISK=$(find $WORK/twrp -maxdepth 2 -name "ramdisk.cpio" -type f | head -1)
+          if [ -n "$TWRP_RAMDISK" ]; then
+            # Extract the second cpio (recovery) from TWRP's concatenated ramdisk
+            echo "TWRP ramdisk: $TWRP_RAMDISK"
+            # Find TRAILER!!! in binary and split
+            python3 -c "
+import sys
+with open('$TWRP_RAMDISK', 'rb') as f:
+    data = f.read()
+idx = data.find(b'TRAILER!!!')
+if idx > 0:
+    # Find zero padding after TRAILER!!!
+    end_of_first = idx + 10  # len('TRAILER!!!\0')
+    while end_of_first < len(data) and data[end_of_first] == 0:
+        end_of_first += 1
+    # Pad to 512-byte boundary
+    end_of_first = ((end_of_first + 511) // 512) * 512
+    print(f'First cpio ends at offset {end_of_first}')
+    second = data[end_of_first:]
+    with open('$WORK/patch/recovery.cpio', 'wb') as out:
+        out.write(second)
+    print(f'Extracted recovery cpio: {len(second)} bytes')
+else:
+    print('Could not find TRAILER!!! in TWRP ramdisk')
+    sys.exit(1)
+"
+          fi
         fi
+        ls -lh $WORK/patch/recovery.cpio 2>/dev/null || echo "No recovery cpio extracted!"
+
+        echo "== 5. Get platform ramdisk =="
+        # For single ramdisk.cpio case, extract platform from stock
+        STOCK_RAMDISK_CPIO=$WORK/stock/ramdisk.cpio
+        STOCK_VENDOR_RAMDISK=$WORK/stock/vendor_ramdisk
+
+        if [ -d "$STOCK_VENDOR_RAMDISK" ]; then
+          echo "vendor_ramdisk/ structure"
+          STOCK_RAMDISK_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
+          STOCK_RECOVERY_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*recovery*cpio*" | head -1)
+          echo "Platform target: $STOCK_RAMDISK_FILE"
+          echo "Recovery target: $STOCK_RECOVERY_FILE"
+          # Platform already there, just compress recovery
+          $MAGISKBOOT compress=lz4_legacy $WORK/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>/dev/null || cp $WORK/patch/recovery.cpio "$STOCK_RECOVERY_FILE"
+        elif [ -f "$STOCK_RAMDISK_CPIO" ]; then
+          echo "Single ramdisk.cpio structure"
+          # Extract platform (first cpio) from stock ramdisk
+          python3 -c "
+import sys
+with open('$STOCK_RAMDISK_CPIO', 'rb') as f:
+    data = f.read()
+idx = data.find(b'TRAILER!!!')
+if idx > 0:
+    end_of_first = idx + 10
+    while end_of_first < len(data) and data[end_of_first] == 0:
+        end_of_first += 1
+    end_of_first = ((end_of_first + 511) // 512) * 512
+    print(f'First cpio ends at offset {end_of_first}')
+    first = data[:end_of_first]
+    with open('$WORK/patch/platform.cpio', 'wb') as out:
+        out.write(first)
+    print(f'Extracted platform cpio: {len(first)} bytes')
+else:
+    print('Could not find TRAILER!!!')
+    sys.exit(1)
+"
+          # Concatenate stock platform + TWRP recovery
+          cat $WORK/patch/platform.cpio $WORK/patch/recovery.cpio > $WORK/stock/ramdisk.cpio
+          echo "Merged ramdisk: $(ls -lh $WORK/stock/ramdisk.cpio | awk '{print $5}')"
+        else
+          echo "No ramdisk found!"
+          exit 1
+        fi
+
+        echo "== 6. Repack =="
+        ls -lh $WORK/stock/
+        cd $WORK/stock && $MAGISKBOOT repack ${GITHUB_WORKSPACE}/stock_vendor_boot.img $WORK/out/vendor_boot_patched.img 2>&1
+
+        echo "== 7. Result =="
+        ls -lh $WORK/out/vendor_boot_patched.img
+        SIZE=$(stat -c%s $WORK/out/vendor_boot_patched.img)
+        echo "Size: $SIZE bytes / 67108864 max"
+        if [ $SIZE -le 67108864 ]; then echo "OK - FITS!"; else echo "OVER by $((SIZE - 67108864)) bytes"; fi
 
     - name: Upload patched image
       uses: actions/upload-artifact@v4
