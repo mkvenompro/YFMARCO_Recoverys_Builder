@@ -39,10 +39,10 @@ jobs:
         mkdir -p $WORK/stock $WORK/twrp $WORK/patch $WORK/out
 
         echo "== Unpack stock =="
-        (cd $WORK/stock && $MAGISKBOOT unpack /github/workspace/stock_vendor_boot.img) 2>&1
+        (cd $WORK/stock && $MAGISKBOOT unpack ${GITHUB_WORKSPACE}/stock_vendor_boot.img) 2>&1
 
         echo "== Unpack TWRP =="
-        (cd $WORK/twrp && $MAGISKBOOT unpack /github/workspace/twrp_vendor_boot.img) 2>&1
+        (cd $WORK/twrp && $MAGISKBOOT unpack ${GITHUB_WORKSPACE}/twrp_vendor_boot.img) 2>&1
 
         echo "== Stock vendor_ramdisk =="
         ls -lh $WORK/stock/vendor_ramdisk/
@@ -56,17 +56,19 @@ jobs:
         $MAGISKBOOT decompress "$RECOVERY" $WORK/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY" $WORK/patch/recovery.cpio
         ls -lh $WORK/patch/recovery.cpio
 
-        echo "== Find stock recovery target =="
+        echo "== Find stock ramdisk & recovery targets =="
+        STOCK_RAMDISK_FILE=$(find $WORK/stock/vendor_ramdisk -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
         STOCK_RECOVERY_FILE=$(find $WORK/stock/vendor_ramdisk -maxdepth 1 -iname "*recovery*cpio*" | head -1)
-        echo "Target: $STOCK_RECOVERY_FILE"
+        echo "Stock ramdisk target: $STOCK_RAMDISK_FILE"
+        echo "Stock recovery target: $STOCK_RECOVERY_FILE"
 
-        echo "== Compress recovery with lz4_legacy =="
+        echo "== Compress recovery with lz4_legacy into stock =="
         $MAGISKBOOT compress=lz4_legacy $WORK/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>&1
         echo "exit=$?"
         ls -lh $WORK/stock/vendor_ramdisk/
 
         echo "== Repack =="
-        (cd $WORK/stock && $MAGISKBOOT repack /github/workspace/stock_vendor_boot.img $WORK/out/vendor_boot_patched.img) 2>&1
+        (cd $WORK/stock && $MAGISKBOOT repack ${GITHUB_WORKSPACE}/stock_vendor_boot.img $WORK/out/vendor_boot_patched.img) 2>&1
 
         echo "== Result =="
         ls -lh $WORK/out/vendor_boot_patched.img
