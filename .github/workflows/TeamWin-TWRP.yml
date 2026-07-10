@@ -214,17 +214,57 @@ jobs:
           exit 1
         fi
 
+    - name: Extract stock platform ramdisk for build
+      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
+      run: |
+        set -euxo pipefail
+        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
+        mkdir -p /tmp/magisk
+        curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
+          unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
+        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
+        MB=/tmp/magisk/magiskboot
+
+        WORK=$(mktemp -d /tmp/stock_extract_XXXXXX)
+        (cd "$WORK" && $MB unpack -n "$STOCK_VB") 2>&1
+
+        # Find platform ramdisk file
+        PLAT_FILE=""
+        for f in "$WORK/vendor_ramdisk.cpio" "$WORK/ramdisk.cpio"; do
+          [ -f "$f" ] && { PLAT_FILE="$f"; break; }
+        done
+        [ -n "$PLAT_FILE" ] || { echo "No platform ramdisk found"; ls -la "$WORK/"; exit 1; }
+
+        # Convert to lz4_legacy for the build system
+        PREBUILT_DIR="${GITHUB_WORKSPACE}/android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}/prebuilt"
+        mkdir -p "$PREBUILT_DIR"
+        $MB decompress "$PLAT_FILE" "$WORK/platform_raw.cpio" 2>/dev/null || cp "$PLAT_FILE" "$WORK/platform_raw.cpio"
+        $MB compress=lz4_legacy "$WORK/platform_raw.cpio" "$PREBUILT_DIR/platform_ramdisk.cpio.lz4" || exit 1
+        echo "Platform ramdisk ready: $(wc -c < "$PREBUILT_DIR/platform_ramdisk.cpio.lz4") bytes"
+        rm -rf "$WORK"
+
     - name: Building Image 
       run: |
         cd android-recovery
-        # Apply compression choice
         BOARD_MK="${GITHUB_WORKSPACE}/android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}/BoardConfig.mk"
+
+        # Apply compression choice
         if grep -q 'BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION' "$BOARD_MK"; then
           sed -i "s/^BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION.*/BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}/" "$BOARD_MK"
         else
           echo "BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}" >> "$BOARD_MK"
         fi
-        echo "Compression set to: ${{ inputs.RAMDISK_COMPRESSION }}"
+
+        # If PATCH_RAMDISK, use prebuilt stock platform ramdisk via fragments
+        if [ "${{ inputs.PATCH_RAMDISK }}" == "true" ]; then
+          sed -i "/^BOARD_VENDOR_RAMDISK_FRAGMENTS\b/d; /^BOARD_VENDOR_RAMDISK_FRAGMENT\./d" "$BOARD_MK"
+          echo 'BOARD_VENDOR_RAMDISK_FRAGMENTS := stock_platform' >> "$BOARD_MK"
+          echo 'BOARD_VENDOR_RAMDISK_FRAGMENT.stock_platform.TYPE := PLATFORM' >> "$BOARD_MK"
+          echo 'BOARD_VENDOR_RAMDISK_FRAGMENT.stock_platform.PREBUILT := $(DEVICE_PATH)/prebuilt/platform_ramdisk.cpio.lz4' >> "$BOARD_MK"
+          echo "Using prebuilt stock platform ramdisk (no post-build patching needed)"
+        fi
+
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
@@ -265,70 +305,6 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Patch vendor_boot with stock ramdisk
-      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
-      run: |
-        set -euxo pipefail
-        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
-        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
-        mkdir -p /tmp/magisk
-        curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-        unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
-          unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
-        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
-        MB=/tmp/magisk/magiskboot
-
-        [ -f "$STOCK_VB" ] || { echo "Stock vendor_boot not found"; exit 1; }
-
-        WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-
-        # ========== Extract built recovery ramdisk ==========
-        BUILT_VB=""
-        for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
-          [ -f "$f" ] && { BUILT_VB="$f"; break; }
-        done
-        [ -n "$BUILT_VB" ] || { echo "No built vendor_boot.img or recovery.img found"; exit 1; }
-
-        mkdir -p "$WORK/built"
-        (cd "$WORK/built" && $MB unpack -n "$BUILT_VB") 2>&1
-
-        # Find recovery cpio file (vendor_ramdisk_recovery.cpio for v4, or recovery.cpio for simple)
-        RECOVERY_FILE=""
-        for f in "$WORK/built/vendor_ramdisk_recovery.cpio" "$WORK/built/vendor_ramdisk_recovery.cpio.lz4" "$WORK/built/recovery.cpio" "$WORK/built/recovery.cpio.lz4"; do
-          [ -f "$f" ] && { RECOVERY_FILE="$f"; break; }
-        done
-        [ -n "$RECOVERY_FILE" ] || { echo "No recovery ramdisk in built image"; ls -la "$WORK/built/"; exit 1; }
-
-        # Decompress to raw cpio
-        $MB decompress "$RECOVERY_FILE" "$WORK/built_recovery.cpio" 2>/dev/null || cp "$RECOVERY_FILE" "$WORK/built_recovery.cpio"
-
-        # ========== Extract stock vendor_boot (keep ramdisks as files with -n) ==========
-        mkdir -p "$WORK/stock"
-        (cd "$WORK/stock" && $MB unpack -n "$STOCK_VB") 2>&1
-
-        # Find stock recovery ramdisk file to overwrite
-        STOCK_RECOV_FILE=""
-        for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4"; do
-          [ -f "$f" ] && { STOCK_RECOV_FILE="$f"; break; }
-        done
-        [ -n "$STOCK_RECOV_FILE" ] || { echo "No recovery ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
-
-        # Overwrite stock recovery with built recovery (lz4_legacy)
-        echo "Replacing $STOCK_RECOV_FILE with built recovery (lz4_legacy)"
-        $MB compress=lz4_legacy "$WORK/built_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
-
-        # ========== Repack ==========
-        (cd "$WORK/stock" && $MB repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
-
-        if [ -f "$OUTDIR/vendor_boot_patched.img" ]; then
-          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
-          echo "Patched image size: $(stat -c%s "$OUTDIR/vendor_boot_patched.img") bytes"
-        else
-          echo "Repack failed"
-          exit 1
-        fi
-        rm -rf "$WORK"
-
     - name: Upload to gofile.io
       if: inputs.GOFILE_UPLOAD == 'true'
       run: |
@@ -341,12 +317,6 @@ jobs:
             echo "$fname -> $link"
           fi
         done
-        if [ -f "${{ env.PATCHED_VB }}" ]; then
-          server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-          response=$(curl -s -F "file=@${{ env.PATCHED_VB }}" "https://$server.gofile.io/uploadFile")
-          link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-          echo "vendor_boot_patched.img -> $link"
-        fi
         echo "Uploading zip files..."
         for f in $(find "${{ env.OUT_DIR }}" -maxdepth 2 -name "*.zip" -type f 2>/dev/null); do
           if [ -f "$f" ]; then
@@ -365,7 +335,6 @@ jobs:
         files: |
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/*installer*zip
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot_patched.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery*.zip
         name: Unofficial TWRP for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
