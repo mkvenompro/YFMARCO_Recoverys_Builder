@@ -272,8 +272,6 @@ jobs:
         set -euxo pipefail
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
-        BUILT_VB="$OUTDIR/vendor_boot.img"
-        [ -f "$BUILT_VB" ] || { echo "No built vendor_boot.img"; exit 1; }
 
         mkdir -p /tmp/magisk
         if [ ! -x /tmp/magisk/magiskboot ]; then
@@ -286,37 +284,59 @@ jobs:
 
         WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
 
-        # Extract built vendor_boot (TWRP combined ramdisk = our recovery)
-        mkdir -p "$WORK/built"
-        (cd "$WORK/built" && $MB unpack -n "$BUILT_VB") 2>&1
-
-        # Find the TWRP ramdisk (either separate recovery.cpio or combined ramdisk.cpio)
-        RECOVERY_SRC=""
-        for f in "$WORK/built/vendor_ramdisk_recovery.cpio" "$WORK/built/recovery.cpio" "$WORK/built/ramdisk.cpio"; do
-          [ -f "$f" ] && { RECOVERY_SRC="$f"; break; }
+        # Find TWRP recovery ramdisk from build output (ramdisk-recovery.cpio*)
+        TWRP_SRC=""
+        for f in "$OUTDIR/ramdisk-recovery.cpio.lz4" "$OUTDIR/ramdisk-recovery.cpio" "$OUTDIR/ramdisk-recovery.lz4"; do
+          [ -f "$f" ] && { TWRP_SRC="$f"; break; }
         done
-        [ -n "$RECOVERY_SRC" ] || { echo "No ramdisk in built image"; ls -la "$WORK/built/"; exit 1; }
 
-        # Decompress to raw cpio
-        $MB decompress "$RECOVERY_SRC" "$WORK/twrp_recovery.cpio" 2>/dev/null || cp "$RECOVERY_SRC" "$WORK/twrp_recovery.cpio"
-        echo "TWRP recovery source: $RECOVERY_SRC ($(stat -c%s "$RECOVERY_SRC") bytes)"
+        # Fallback: try extracting from built vendor_boot
+        if [ -z "$TWRP_SRC" ] && [ -f "$OUTDIR/vendor_boot.img" ]; then
+          BUILT_VB="$OUTDIR/vendor_boot.img"
+          mkdir -p "$WORK/built"
+          (cd "$WORK/built" && $MB unpack -n "$BUILT_VB") 2>&1
+          for f in "$WORK/built/vendor_ramdisk_recovery.cpio" "$WORK/built/recovery.cpio" "$WORK/built/ramdisk.cpio"; do
+            [ -f "$f" ] && { TWRP_SRC="$f"; break; }
+          done
+        fi
+
+        [ -n "$TWRP_SRC" ] || { echo "No TWRP ramdisk found anywhere"; exit 1; }
+
+        # Decompress TWRP ramdisk to raw cpio
+        mkdir -p "$WORK/twrp"
+        $MB decompress "$TWRP_SRC" "$WORK/twrp_raw.cpio" 2>/dev/null || cp "$TWRP_SRC" "$WORK/twrp_raw.cpio"
+        echo "TWRP source: $TWRP_SRC ($(stat -c%s "$TWRP_SRC") bytes)"
+
+        # Extract TWRP cpio to directory
+        (cd "$WORK/twrp" && cpio -idm < "$WORK/twrp_raw.cpio") 2>&1 || (cd "$WORK/twrp" && $MB unpack "$WORK/twrp_raw.cpio") 2>&1
 
         # Extract stock vendor_boot
         mkdir -p "$WORK/stock"
-        (cd "$WORK/stock" && $MB unpack -n "$STOCK_VB") 2>&1
+        (cd "$WORK/stock" && $MB unpack "$STOCK_VB") 2>&1
 
-        # Find stock recovery ramdisk file to overwrite
-        STOCK_RECOV_FILE=""
-        for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4"; do
-          [ -f "$f" ] && { STOCK_RECOV_FILE="$f"; break; }
+        # Check if stock has separate recovery fragment or single combined ramdisk
+        STOCK_RAMDISK_FILE=""
+        for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4" "$WORK/stock/ramdisk.cpio" "$WORK/stock/ramdisk.cpio.lz4"; do
+          [ -f "$f" ] && { STOCK_RAMDISK_FILE="$f"; break; }
         done
-        [ -n "$STOCK_RECOV_FILE" ] || { echo "No recovery ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
-        echo "Stock recovery file: $STOCK_RECOV_FILE"
+        [ -n "$STOCK_RAMDISK_FILE" ] || { echo "No ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
+        echo "Stock ramdisk: $STOCK_RAMDISK_FILE"
 
-        # Overwrite stock recovery with TWRP recovery (lz4_legacy)
-        $MB compress=lz4_legacy "$WORK/twrp_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
+        # Decompress stock ramdisk
+        mkdir -p "$WORK/stock_ramdisk"
+        $MB decompress "$STOCK_RAMDISK_FILE" "$WORK/stock_raw.cpio" 2>/dev/null || cp "$STOCK_RAMDISK_FILE" "$WORK/stock_raw.cpio"
+        (cd "$WORK/stock_ramdisk" && cpio -idm < "$WORK/stock_raw.cpio") 2>&1 || (cd "$WORK/stock_ramdisk" && $MB unpack "$WORK/stock_raw.cpio") 2>&1
 
-        # Repack
+        # Overlay TWRP files onto stock ramdisk (replaces stock recovery files)
+        cp -af "$WORK/twrp/"* "$WORK/stock_ramdisk/"
+
+        # Repack combined ramdisk
+        (cd "$WORK/stock_ramdisk" && find . | cpio -H newc -o > "$WORK/combined.cpio") 2>/dev/null
+        $MB compress=lz4_legacy "$WORK/combined.cpio" "$WORK/stock_ramdisk.cpio.lz4"
+        rm -f "$WORK/stock/ramdisk.cpio" "$WORK/stock/ramdisk.cpio.lz4"
+        cp "$WORK/stock_ramdisk.cpio.lz4" "$WORK/stock/ramdisk.cpio.lz4"
+
+        # Repack vendor_boot
         (cd "$WORK/stock" && $MB repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
 
         if [ -f "$OUTDIR/vendor_boot_patched.img" ]; then
