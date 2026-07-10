@@ -268,99 +268,65 @@ jobs:
     - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
       run: |
+        set -euxo pipefail
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
-        STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
         mkdir -p /tmp/magisk
         curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
           unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
-        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
-        chmod +x /tmp/magisk/magiskboot
-        MAGISKBOOT=/tmp/magisk/magiskboot
+        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
+        MB=/tmp/magisk/magiskboot
 
-        if [ ! -f "$STOCK_VB" ]; then
-          echo "Stock vendor_boot not found at: $STOCK_VB"
-          exit 1
-        fi
-        if [ ! -f "$STOCK_RAMDISK" ]; then
-          echo "Stock platform ramdisk not found at: $STOCK_RAMDISK"
-          exit 1
-        fi
-
-        RECOVERY_CPIO=$(find "$OUTDIR" -maxdepth 2 -name "ramdisk-recovery.cpio*" -type f | head -1)
-        if [ -z "$RECOVERY_CPIO" ]; then
-          echo "No standalone ramdisk-recovery.cpio, extracting from built vendor_boot"
-          BUILT_VB=""
-          for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
-            [ -f "$f" ] && { BUILT_VB="$f"; break; }
-          done
-          if [ -z "$BUILT_VB" ]; then
-            echo "No built vendor_boot.img or recovery.img found"
-            exit 1
-          fi
-        fi
+        [ -f "$STOCK_VB" ] || { echo "Stock vendor_boot not found"; exit 1; }
 
         WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-        mkdir -p "$WORK/stock" "$WORK/patch"
 
-        echo "== Unpacking STOCK vendor_boot =="
-        (cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB") 2>&1
-        echo "== Stock files =="
-        find "$WORK/stock" -maxdepth 2 -type f | sort
+        # ========== Extract built recovery ramdisk ==========
+        BUILT_VB=""
+        for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
+          [ -f "$f" ] && { BUILT_VB="$f"; break; }
+        done
+        [ -n "$BUILT_VB" ] || { echo "No built vendor_boot.img or recovery.img found"; exit 1; }
 
-        # Decompress stock platform ramdisk to raw cpio
-        echo "== Decompressing stock platform ramdisk =="
-        $MAGISKBOOT decompress "$STOCK_RAMDISK" "$WORK/patch/platform.cpio" 2>/dev/null || cp "$STOCK_RAMDISK" "$WORK/patch/platform.cpio"
+        mkdir -p "$WORK/built"
+        (cd "$WORK/built" && $MB unpack -n "$BUILT_VB") 2>&1
 
-        # Get built recovery ramdisk (raw cpio)
-        echo "== Getting built recovery ramdisk =="
-        if [ -n "$RECOVERY_CPIO" ]; then
-          $MAGISKBOOT decompress "$RECOVERY_CPIO" "$WORK/patch/recovery.cpio" 2>/dev/null || cp "$RECOVERY_CPIO" "$WORK/patch/recovery.cpio"
-          echo "Using standalone ramdisk-recovery.cpio"
+        # Find recovery cpio file (vendor_ramdisk_recovery.cpio for v4, or recovery.cpio for simple)
+        RECOVERY_FILE=""
+        for f in "$WORK/built/vendor_ramdisk_recovery.cpio" "$WORK/built/vendor_ramdisk_recovery.cpio.lz4" "$WORK/built/recovery.cpio" "$WORK/built/recovery.cpio.lz4"; do
+          [ -f "$f" ] && { RECOVERY_FILE="$f"; break; }
+        done
+        [ -n "$RECOVERY_FILE" ] || { echo "No recovery ramdisk in built image"; ls -la "$WORK/built/"; exit 1; }
+
+        # Decompress to raw cpio
+        $MB decompress "$RECOVERY_FILE" "$WORK/built_recovery.cpio" 2>/dev/null || cp "$RECOVERY_FILE" "$WORK/built_recovery.cpio"
+
+        # ========== Extract stock vendor_boot (keep ramdisks as files with -n) ==========
+        mkdir -p "$WORK/stock"
+        (cd "$WORK/stock" && $MB unpack -n "$STOCK_VB") 2>&1
+
+        # Find stock recovery ramdisk file to overwrite
+        STOCK_RECOV_FILE=""
+        for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4"; do
+          [ -f "$f" ] && { STOCK_RECOV_FILE="$f"; break; }
+        done
+        [ -n "$STOCK_RECOV_FILE" ] || { echo "No recovery ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
+
+        # Overwrite stock recovery with built recovery (lz4_legacy)
+        echo "Replacing $STOCK_RECOV_FILE with built recovery (lz4_legacy)"
+        $MB compress=lz4_legacy "$WORK/built_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
+
+        # ========== Repack ==========
+        (cd "$WORK/stock" && $MB repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
+
+        if [ -f "$OUTDIR/vendor_boot_patched.img" ]; then
+          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
+          echo "Patched image size: $(stat -c%s "$OUTDIR/vendor_boot_patched.img") bytes"
         else
-          mkdir -p "$WORK/built"
-          (cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB") 2>&1
-          RECOVERY=$(find "$WORK/built" -maxdepth 2 -iname "*recovery*cpio*" -o -name "ramdisk.cpio" | head -1)
-          if [ -z "$RECOVERY" ]; then
-            echo "Could not locate any recovery cpio in built image"
-            exit 1
-          fi
-          $MAGISKBOOT decompress "$RECOVERY" "$WORK/patch/recovery.cpio" 2>/dev/null || cp "$RECOVERY" "$WORK/patch/recovery.cpio"
-          echo "Using recovery from built image: $RECOVERY"
-        fi
-
-        # Determine stock vendor_ramdisk structure and replace ramdisks
-        echo "== Replacing ramdisks in stock vendor_boot =="
-        STOCK_VENDOR_RAMDISK="$WORK/stock/vendor_ramdisk"
-        STOCK_CPIO=$(find "$WORK/stock" -maxdepth 2 -name "ramdisk.cpio" -type f | head -1)
-
-        if [ -d "$STOCK_VENDOR_RAMDISK" ]; then
-          echo "stock has vendor_ramdisk/ directory"
-          STOCK_RAMDISK_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
-          STOCK_RECOVERY_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*recovery*cpio*" | head -1)
-
-          echo "Compressing platform with lz4_legacy..."
-          $MAGISKBOOT compress=lz4_legacy "$WORK/patch/platform.cpio" "$STOCK_RAMDISK_FILE" || exit 1
-          if [ -n "$STOCK_RECOVERY_FILE" ]; then
-            echo "Compressing recovery with lz4_legacy..."
-            $MAGISKBOOT compress=lz4_legacy "$WORK/patch/recovery.cpio" "$STOCK_RECOVERY_FILE" || exit 1
-          fi
-        elif [ -n "$STOCK_CPIO" ]; then
-          echo "stock has single ramdisk.cpio, concatenating platform + recovery"
-          cat "$WORK/patch/platform.cpio" "$WORK/patch/recovery.cpio" > "$STOCK_CPIO"
-        else
-          echo "Could not find any ramdisk in stock vendor_boot"
+          echo "Repack failed"
           exit 1
         fi
-
-        echo "== Repacking patched vendor_boot =="
-        (cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
-        if [ ! -f "$OUTDIR/vendor_boot_patched.img" ]; then
-          echo "magiskboot repack did not produce vendor_boot_patched.img"
-          exit 1
-        fi
-        echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
         rm -rf "$WORK"
 
     - name: Upload to gofile.io
