@@ -9,7 +9,6 @@ on:
         default: ''
         type: choice
         options:
-        - android-14.0
         - android-12.1
         - android-11.0
         - android-10.0
@@ -20,11 +19,19 @@ on:
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/YFMARCO-Dev/recovery_device_tree'
+        default: 'https://github.com/lazycodebuilder/recovery_rmx1851'
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
         default: 'android-14_pbrp'
+      DEVICE_PATH:
+        description: 'Specify your Device Path'
+        required: true
+        default: 'device/realme/RMX1851'
+      DEVICE_NAME:
+        description: 'Specify your Device Codename'
+        required: true
+        default: 'RMX1851' 
       BUILD_TARGET:
         description: 'Specify your Build Target'
         required: true
@@ -35,46 +42,20 @@ on:
         - bootimage
         - recoveryimage
         - vendorbootimage
-      PATCH_RAMDISK:
-        description: 'Patch vendor_boot with stock ramdisk (needs prebuilt/platform_ramdisk.cpio.lz4 in device tree)'
-        required: false
-        default: false
-        type: boolean
-      STOCK_VENDOR_BOOT_URL:
-        description: 'URL to stock vendor_boot.img (required if PATCH_RAMDISK=true)'
-        required: false
-        default: ''
-      GOFILE_UPLOAD:
-        description: 'Upload results to gofile.io'
-        required: false
-        default: false
-        type: boolean
-      CCACHE_ENABLE:
-        description: 'Enable CCACHE (faster rebuilds)'
-        required: false
-        default: true
-        type: boolean
-      CCACHE_MAXSIZE:
-        description: 'CCACHE max size'
-        required: false
-        default: '10G'
       LDCHECK:
         description: 'Use LDCHECK'
         required: false
-        default: false
+        default: 'false'
         type: boolean
       LDCHECKPATH:
         description: 'Path of blobs to check'
         required: true
         default: 'system/bin/qseecomd'
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build PBRP by ${{ github.actor }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     if: github.event.repository.owner.id == github.event.sender.id
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,17 +63,17 @@ jobs:
       contents: write
     steps:
     - name: Check Out
-      uses: actions/checkout@v5
+      uses: actions/checkout@v3
 
     - name: Display Inputs
       run: |
         echo "Displaying variables/inputs."
-        echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree: ${{ inputs.DEVICE_TREE }}"
-        echo "Device Branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
-        echo "Build Target: ${{ inputs.BUILD_TARGET }}"
-        echo "PATCH_RAMDISK: ${{ inputs.PATCH_RAMDISK }}"
-        echo "GOFILE_UPLOAD: ${{ inputs.GOFILE_UPLOAD }}"
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree: ${{ github.event.inputs.DEVICE_TREE }}"
+        echo "Device Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}image"
 
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
@@ -102,39 +83,16 @@ jobs:
       with:
         swap-size-gb: 12
 
-    - name: Restore ccache
-      if: inputs.CCACHE_ENABLE == 'true'
-      uses: actions/cache@v4
-      with:
-        path: /tmp/ccache
-        key: ccache-pbrp-${{ inputs.MANIFEST_BRANCH }}-${{ github.sha }}
-        restore-keys: |
-          ccache-pbrp-${{ inputs.MANIFEST_BRANCH }}-
-          ccache-pbrp-
-
-    - name: Set ccache size
-      if: inputs.CCACHE_ENABLE == 'true'
-      run: |
-        ccache -M ${{ inputs.CCACHE_MAXSIZE }}
-        ccache -o compression=true
-        echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
-
-    - name: Check Manifest Branch
-      run: |
-        if [ ${{ inputs.MANIFEST_BRANCH }} == 'android-11.0' ] || [ ${{ inputs.MANIFEST_BRANCH }} == 'android-12.1' ] || [ ${{ inputs.MANIFEST_BRANCH }} == 'android-14.0' ]; then
-            echo "CHECK_LEGACY_BRANCH=false" >> $GITHUB_ENV
-        else
-            echo "CHECK_LEGACY_BRANCH=true" >> $GITHUB_ENV
-        fi
-
     - name: Prepare the environment
       run: |
         sudo apt update
         sudo apt -y upgrade
-        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3 curl repo git
+        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev python2 python3
+        sudo add-apt-repository universe
+        sudo apt -y install libncurses5
 
     - name: Install OpenJDK
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v3
       with:
         distribution: 'zulu'
         java-version: '8'
@@ -150,277 +108,80 @@ jobs:
       run: |
         mkdir android-recovery
         cd android-recovery
-        git config --global user.name "${{ github.actor }}"
-        git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        repo init --depth=1 -u https://github.com/PitchBlackRecoveryProject/manifest_pb.git -b ${{ inputs.MANIFEST_BRANCH }}
+        git config --global user.name "lazycodebuilder"
+        git config --global user.email "154446636+lazycodebuilder@users.noreply.github.com"
+        repo init --depth=1 -u https://github.com/PitchBlackRecoveryProject/manifest_pb.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
     - name: Repo Sync
       run: |
         cd android-recovery
         repo sync -j$(nproc --all) --force-sync
-
-    - name: Ensure Guava dependency exists
-      if: inputs.MANIFEST_BRANCH == 'android-14.0'
-      run: |
-        cd android-recovery
-        if [ -f external/guava/Android.bp ] && grep -q 'name:[[:space:]]*"guava"' external/guava/Android.bp; then
-          echo "guava module is already available."
-        else
-          rm -rf external/guava
-          git clone --depth=1 https://android.googlesource.com/platform/external/guava external/guava
-        fi
       
     - name: Clone Device Tree
       run: |
         cd android-recovery
-        git clone https://$(echo "${{ secrets.RECOVERY_USERNAME }}" | sed 's/@/%40/'):${{ secrets.RECOVERY_TOKEN }}@$(echo "${{ inputs.DEVICE_TREE }}" | sed 's~https://~~') -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
-        cd device_tree
+        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+        cd ${{ github.event.inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-    - name: Extracting variables from .mk file
-      run: |
-        cd android-recovery/device_tree
-        DEVICE_MAKEFILE=""
-        DEVICE_DIRECTORY=""
-        DEVICE_NAME=""
-        for file in *.mk; do
-            makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-            brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-            codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-            if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
-                DEVICE_MAKEFILE="$makefile"
-                DEVICE_DIRECTORY="device/$brand"
-                DEVICE_NAME="$codename"
-                echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
-                echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-                echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-                break
-            fi
-        done
-        cd ../
-        mkdir -p "$DEVICE_DIRECTORY"
-        mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
-        RAMDISK_PATH="${GITHUB_WORKSPACE}/android-recovery/${DEVICE_DIRECTORY}/${DEVICE_NAME}/prebuilt/platform_ramdisk.cpio.lz4"
-        echo "STOCK_RAMDISK_PATH=${RAMDISK_PATH}" >> $GITHUB_ENV
-
-    - name: Installing python2 for legacy builds
-      if: env.CHECK_LEGACY_BRANCH == 'true'
-      run: |
-        sudo apt-get install python2 python-is-python2
-
-    - name: Get stock vendor_boot (from repo root or download)
-      if: ${{ inputs.PATCH_RAMDISK }}
-      run: |
-        if [ -f "${GITHUB_WORKSPACE}/vendor_boot.img" ]; then
-          echo "Using vendor_boot.img from repo root"
-          echo "STOCK_VENDOR_BOOT_PATH=${GITHUB_WORKSPACE}/vendor_boot.img" >> $GITHUB_ENV
-        elif [ -n "${{ inputs.STOCK_VENDOR_BOOT_URL }}" ]; then
-          URL="${{ inputs.STOCK_VENDOR_BOOT_URL }}"
-          echo "Downloading stock vendor_boot from $URL"
-          mkdir -p /tmp/stock
-          aria2c -x 4 -s 4 "$URL" -d /tmp/stock -o vendor_boot.img
-          echo "STOCK_VENDOR_BOOT_PATH=/tmp/stock/vendor_boot.img" >> $GITHUB_ENV
-        else
-          echo "No vendor_boot.img found in repo root and no STOCK_VENDOR_BOOT_URL provided. Skipping patch."
-          exit 1
-        fi
-
-    - name: Building PitchBlack
-      run: |
-        cd android-recovery
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        if [ "${{ inputs.CCACHE_ENABLE }}" == "true" ]; then
-            export USE_CCACHE=1
-            export CCACHE_EXEC=$(which ccache)
-            echo "ccache enabled — dir: $CCACHE_DIR, max: ${{ inputs.CCACHE_MAXSIZE }}"
-        fi
-        if [ ${{ inputs.MANIFEST_BRANCH }} == 'android-14.0' ]; then
-            lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng && mka adbd ${{ inputs.BUILD_TARGET }}image
-        else
-            lunch ${{ env.DEVICE_MAKEFILE }}-eng && mka ${{ inputs.BUILD_TARGET }}image
-        fi
 
     - name: Check Build Makefile
       run: |
         cd android-recovery
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/recovery.img ]; then
+        if [ -f ${{ github.event.inputs.DEVICE_PATH }}/twrp_${{ github.event.inputs.DEVICE_NAME}}.mk ]; then
+            echo "DEVICE_MAKEFILE=twrp_${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
+        elif [ -f ${{ github.event.inputs.DEVICE_PATH }}/omni_${{ github.event.inputs.DEVICE_NAME}}.mk ]; then
+            echo "DEVICE_MAKEFILE=omni_${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
+        else
+            echo "No recovery makefile file found!"
+        fi
+      continue-on-error: true
+
+    - name: Installing py-is-py2 for legacy builds
+      run: |
+        sudo apt-get install python-is-python2
+
+    - name: Building Image
+      run: |
+        cd android-recovery
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch ${{ env.DEVICE_MAKEFILE }}-eng && mka ${{ github.event.inputs.BUILD_TARGET }}
+
+    - name: Check Build Makefile
+      run: |
+        cd android-recovery
+        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img ]; then
             echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
-        elif [ -f out/target/product/${{ env.DEVICE_NAME }}/boot.img ]; then
+        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/boot.img ]; then
             echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
         else
             echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
 
-    - name: Find built images
-      id: find_imgs
-      run: |
-        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
-        echo "OUT_DIR=${OUTDIR}" >> $GITHUB_ENV
-        IMGS=""
-        for pattern in "PBRP*.img" "vendor_boot.img" "recovery.img" "boot.img"; do
-          for f in $(find "$OUTDIR" -maxdepth 2 -name "$pattern" -type f 2>/dev/null); do
-            IMGS="$IMGS $f"
-          done
-        done
-        if [ -z "$IMGS" ]; then
-          for f in $(find "$OUTDIR" -maxdepth 3 -name "*.img" -type f 2>/dev/null); do
-            IMGS="$IMGS $f"
-          done
-        fi
-        echo "FOUND_IMGS=${IMGS}" >> $GITHUB_ENV
-
     - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Patch vendor_boot with stock ramdisk
-      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
-      continue-on-error: true
-      run: |
-        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
-        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
-        STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
-        mkdir -p /tmp/magisk
-        curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-        unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
-          unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
-        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
-        chmod +x /tmp/magisk/magiskboot
-        MAGISKBOOT=/tmp/magisk/magiskboot
-
-        if [ ! -f "$STOCK_VB" ]; then
-          echo "Stock vendor_boot not found at: $STOCK_VB"
-          exit 1
-        fi
-        if [ ! -f "$STOCK_RAMDISK" ]; then
-          echo "Stock platform ramdisk not found at: $STOCK_RAMDISK"
-          exit 1
-        fi
-
-        RECOVERY_CPIO=$(find "$OUTDIR" -maxdepth 2 -name "ramdisk-recovery.cpio*" -type f | head -1)
-        if [ -z "$RECOVERY_CPIO" ]; then
-          echo "No standalone ramdisk-recovery.cpio, extracting from built vendor_boot"
-          BUILT_VB=""
-          for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
-            [ -f "$f" ] && { BUILT_VB="$f"; break; }
-          done
-          if [ -z "$BUILT_VB" ]; then
-            echo "No built vendor_boot.img or recovery.img found"
-            exit 1
-          fi
-        fi
-
-        WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-        mkdir -p "$WORK/stock"
-
-        echo "== Unpacking STOCK vendor_boot =="
-        (cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB") 2>&1
-        echo "== Stock files =="
-        find "$WORK/stock" -maxdepth 2 -type f | sort
-
-        mkdir -p /tmp/patch
-        $MAGISKBOOT decompress "$STOCK_RAMDISK" /tmp/patch/platform.cpio 2>/dev/null || cp "$STOCK_RAMDISK" /tmp/patch/platform.cpio
-
-        if [ -n "$RECOVERY_CPIO" ]; then
-          $MAGISKBOOT decompress "$RECOVERY_CPIO" /tmp/patch/recovery.cpio 2>/dev/null || cp "$RECOVERY_CPIO" /tmp/patch/recovery.cpio
-          echo "Using standalone ramdisk-recovery.cpio"
-        else
-          mkdir -p "$WORK/built"
-          (cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB") 2>&1
-          RECOVERY=$(find "$WORK/built" -maxdepth 2 -iname "*recovery*cpio*" -o -name "ramdisk.cpio" | head -1)
-          if [ -z "$RECOVERY" ]; then
-            echo "Could not locate any recovery cpio in built image"
-            exit 1
-          fi
-          cp "$RECOVERY" /tmp/patch/recovery.cpio
-          echo "Using recovery from built image: $RECOVERY"
-        fi
-
-        STOCK_CPIO=$(find "$WORK/stock" -maxdepth 2 -name "ramdisk.cpio" -type f | head -1)
-        STOCK_VENDOR_RAMDISK="$WORK/stock/vendor_ramdisk"
-        if [ -d "$STOCK_VENDOR_RAMDISK" ]; then
-          echo "stock has vendor_ramdisk/ directory"
-          STOCK_RAMDISK_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*ramdisk*cpio*" ! -iname "*recovery*" | head -1)
-          STOCK_RECOVERY_FILE=$(find "$STOCK_VENDOR_RAMDISK" -maxdepth 1 -iname "*recovery*cpio*" | head -1)
-
-          echo "Compressing platform with lz4_legacy..."
-          $MAGISKBOOT compress=lz4_legacy /tmp/patch/platform.cpio "$STOCK_RAMDISK_FILE" 2>/dev/null || cp /tmp/patch/platform.cpio "$STOCK_RAMDISK_FILE"
-          if [ -n "$STOCK_RECOVERY_FILE" ]; then
-            echo "Compressing recovery with lz4_legacy..."
-            $MAGISKBOOT compress=lz4_legacy /tmp/patch/recovery.cpio "$STOCK_RECOVERY_FILE" 2>/dev/null || cp /tmp/patch/recovery.cpio "$STOCK_RECOVERY_FILE"
-          fi
-        elif [ -n "$STOCK_CPIO" ]; then
-          echo "stock has single ramdisk.cpio, concatenating platform + recovery"
-          cat /tmp/patch/platform.cpio /tmp/patch/recovery.cpio > "$STOCK_CPIO"
-        else
-          echo "Could not find any ramdisk in stock vendor_boot"
-          exit 1
-        fi
-
-        (cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
-        if [ ! -f "$OUTDIR/vendor_boot_patched.img" ]; then
-          echo "magiskboot repack did not produce vendor_boot_patched.img"
-          exit 1
-        fi
-        echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
-        rm -rf "$WORK"
-
-    - name: Upload to gofile.io
-      if: inputs.GOFILE_UPLOAD == 'true'
-      run: |
-        for f in ${{ env.FOUND_IMGS }}; do
-          if [ -f "$f" ]; then
-            fname=$(basename "$f")
-            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
-            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-            echo "$fname -> $link"
-          fi
-        done
-        if [ -f "${{ env.PATCHED_VB }}" ]; then
-          server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-          response=$(curl -s -F "file=@${{ env.PATCHED_VB }}" "https://$server.gofile.io/uploadFile")
-          link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-          echo "vendor_boot_patched.img -> $link"
-        fi
-        echo "Uploading zip files..."
-        for f in $(find "${{ env.OUT_DIR }}" -maxdepth 2 -name "*.zip" -type f 2>/dev/null); do
-          if [ -f "$f" ]; then
-            fname=$(basename "$f")
-            server=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['servers'][0]['name'])" 2>/dev/null || echo "store9")
-            response=$(curl -s -F "file=@$f" "https://$server.gofile.io/uploadFile")
-            link=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['downloadPage'])" 2>/dev/null || echo "Upload failed")
-            echo "$fname -> $link"
-          fi
-        done
-
     - name: Upload to Release
-      continue-on-error: true
-      uses: softprops/action-gh-release@v2.3.0
+      uses: softprops/action-gh-release@v1
       with:
         files: |
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/PBRP*.zip
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot_patched.img
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery*.zip
-        name: Unofficial PBRP for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
+          android-recovery/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
+          android-recovery/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/PBRP*.zip
+        name: Unofficial PBRP for ${{ github.event.inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
-        token: ${{ secrets.RECOVERY_TOKEN }}
         body: |
-          Build: ${{ inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
-          PATCH_RAMDISK: ${{ inputs.PATCH_RAMDISK }}
+          Build: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          Device: [Device Tree/Branch](${{ github.event.inputs.DEVICE_TREE }}/tree/${{ github.event.inputs.DEVICE_TREE_BRANCH }})
+          Commit: Most recent [commit](${{ github.event.inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
 
     - name: Run LDCheck
-      if: inputs.LDCHECK == 'true'
+      if: github.event.inputs.LDCHECK == 'true'
       run: |
         cd tools
-        mv -n libneeds ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
-        mv -n ldcheck ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
-        cd ../android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root
-        python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
+        mv -n libneeds ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root/
+        mv -n ldcheck ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root/
+        cd ../android-recovery/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root
+        python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ github.event.inputs.LDCHECKPATH }}
         echo "Done checking missing dependencies. Review, and reconfigure your tree."
       continue-on-error: true
