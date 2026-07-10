@@ -214,36 +214,6 @@ jobs:
           exit 1
         fi
 
-    - name: Extract stock platform ramdisk for build
-      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
-      run: |
-        set -euxo pipefail
-        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
-        mkdir -p /tmp/magisk
-        curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-        unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
-          unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
-        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
-        MB=/tmp/magisk/magiskboot
-
-        WORK=$(mktemp -d /tmp/stock_extract_XXXXXX)
-        (cd "$WORK" && $MB unpack -n "$STOCK_VB") 2>&1
-
-        # Find platform ramdisk file
-        PLAT_FILE=""
-        for f in "$WORK/vendor_ramdisk.cpio" "$WORK/ramdisk.cpio"; do
-          [ -f "$f" ] && { PLAT_FILE="$f"; break; }
-        done
-        [ -n "$PLAT_FILE" ] || { echo "No platform ramdisk found"; ls -la "$WORK/"; exit 1; }
-
-        # Convert to lz4_legacy for the build system
-        PREBUILT_DIR="${GITHUB_WORKSPACE}/android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}/prebuilt"
-        mkdir -p "$PREBUILT_DIR"
-        $MB decompress "$PLAT_FILE" "$WORK/platform_raw.cpio" 2>/dev/null || cp "$PLAT_FILE" "$WORK/platform_raw.cpio"
-        $MB compress=lz4_legacy "$WORK/platform_raw.cpio" "$PREBUILT_DIR/platform_ramdisk.cpio.lz4" || exit 1
-        echo "Platform ramdisk ready: $(wc -c < "$PREBUILT_DIR/platform_ramdisk.cpio.lz4") bytes"
-        rm -rf "$WORK"
-
     - name: Building Image 
       run: |
         cd android-recovery
@@ -254,15 +224,6 @@ jobs:
           sed -i "s/^BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION.*/BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}/" "$BOARD_MK"
         else
           echo "BOARD_VENDOR_BOOT_RAMDISK_COMPRESSION := ${{ inputs.RAMDISK_COMPRESSION }}" >> "$BOARD_MK"
-        fi
-
-        # If PATCH_RAMDISK, use prebuilt stock platform ramdisk via fragments
-        if [ "${{ inputs.PATCH_RAMDISK }}" == "true" ]; then
-          sed -i "/^BOARD_VENDOR_RAMDISK_FRAGMENTS\b/d; /^BOARD_VENDOR_RAMDISK_FRAGMENT\./d" "$BOARD_MK"
-          echo 'BOARD_VENDOR_RAMDISK_FRAGMENTS := stock_platform' >> "$BOARD_MK"
-          echo 'BOARD_VENDOR_RAMDISK_FRAGMENT.stock_platform.TYPE := PLATFORM' >> "$BOARD_MK"
-          echo 'BOARD_VENDOR_RAMDISK_FRAGMENT.stock_platform.PREBUILT := $(DEVICE_PATH)/prebuilt/platform_ramdisk.cpio.lz4' >> "$BOARD_MK"
-          echo "Using prebuilt stock platform ramdisk (no post-build patching needed)"
         fi
 
         source build/envsetup.sh
@@ -305,14 +266,14 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Fallback patcher (if BoardConfig fragment approach didn't separate ramdisks)
+    - name: Patch vendor_boot (replace stock recovery with TWRP)
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
       run: |
         set -euxo pipefail
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
         BUILT_VB="$OUTDIR/vendor_boot.img"
-        [ -f "$BUILT_VB" ] || { echo "No built vendor_boot.img"; exit 0; }
+        [ -f "$BUILT_VB" ] || { echo "No built vendor_boot.img"; exit 1; }
 
         mkdir -p /tmp/magisk
         if [ ! -x /tmp/magisk/magiskboot ]; then
@@ -324,48 +285,47 @@ jobs:
         MB=/tmp/magisk/magiskboot
 
         WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-        mkdir -p "$WORK/check"
-        (cd "$WORK/check" && $MB unpack -n "$BUILT_VB") 2>&1
 
-        # If built image already has separate recovery fragment, no patching needed
-        if [ -f "$WORK/check/vendor_ramdisk_recovery.cpio" ] || [ -f "$WORK/check/recovery.cpio" ]; then
-          echo "Built image has separate recovery — fragment approach worked. Skipping fallback."
-          rm -rf "$WORK"
-          exit 0
-        fi
+        # Extract built vendor_boot (TWRP combined ramdisk = our recovery)
+        mkdir -p "$WORK/built"
+        (cd "$WORK/built" && $MB unpack -n "$BUILT_VB") 2>&1
 
-        # Fallback: built image has single ramdisk.cpio (combined platform+recovery)
-        echo "Built image has combined ramdisk.cpio — running fallback patcher"
-        BUILT_RAMDISK="$WORK/check/ramdisk.cpio"
-        [ -f "$BUILT_RAMDISK" ] || { echo "No ramdisk.cpio in built image"; exit 1; }
+        # Find the TWRP ramdisk (either separate recovery.cpio or combined ramdisk.cpio)
+        RECOVERY_SRC=""
+        for f in "$WORK/built/vendor_ramdisk_recovery.cpio" "$WORK/built/recovery.cpio" "$WORK/built/ramdisk.cpio"; do
+          [ -f "$f" ] && { RECOVERY_SRC="$f"; break; }
+        done
+        [ -n "$RECOVERY_SRC" ] || { echo "No ramdisk in built image"; ls -la "$WORK/built/"; exit 1; }
 
-        # Decompress built ramdisk to raw cpio (this IS the TWRP recovery)
-        $MB decompress "$BUILT_RAMDISK" "$WORK/built_recovery.cpio" 2>/dev/null || cp "$BUILT_RAMDISK" "$WORK/built_recovery.cpio"
+        # Decompress to raw cpio
+        $MB decompress "$RECOVERY_SRC" "$WORK/twrp_recovery.cpio" 2>/dev/null || cp "$RECOVERY_SRC" "$WORK/twrp_recovery.cpio"
+        echo "TWRP recovery source: $RECOVERY_SRC ($(stat -c%s "$RECOVERY_SRC") bytes)"
 
         # Extract stock vendor_boot
         mkdir -p "$WORK/stock"
         (cd "$WORK/stock" && $MB unpack -n "$STOCK_VB") 2>&1
 
-        # Find stock recovery file to overwrite
+        # Find stock recovery ramdisk file to overwrite
         STOCK_RECOV_FILE=""
         for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4"; do
           [ -f "$f" ] && { STOCK_RECOV_FILE="$f"; break; }
         done
         [ -n "$STOCK_RECOV_FILE" ] || { echo "No recovery ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
+        echo "Stock recovery file: $STOCK_RECOV_FILE"
 
         # Overwrite stock recovery with TWRP recovery (lz4_legacy)
-        $MB compress=lz4_legacy "$WORK/built_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
+        $MB compress=lz4_legacy "$WORK/twrp_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
 
         # Repack
         (cd "$WORK/stock" && $MB repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
 
         if [ -f "$OUTDIR/vendor_boot_patched.img" ]; then
           echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
-          echo "Fallback patcher done: $(stat -c%s "$OUTDIR/vendor_boot_patched.img") bytes"
+          echo "Patcher done: vendor_boot_patched.img ($(stat -c%s "$OUTDIR/vendor_boot_patched.img") bytes)"
           cp "$OUTDIR/vendor_boot_patched.img" "$OUTDIR/vendor_boot.img"
           echo "Replaced vendor_boot.img with patched version"
         else
-          echo "Fallback patcher failed"
+          echo "Patcher failed"
           exit 1
         fi
         rm -rf "$WORK"
