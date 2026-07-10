@@ -305,6 +305,71 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
+    - name: Fallback patcher (if BoardConfig fragment approach didn't separate ramdisks)
+      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
+      run: |
+        set -euxo pipefail
+        OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
+        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
+        BUILT_VB="$OUTDIR/vendor_boot.img"
+        [ -f "$BUILT_VB" ] || { echo "No built vendor_boot.img"; exit 0; }
+
+        mkdir -p /tmp/magisk
+        if [ ! -x /tmp/magisk/magiskboot ]; then
+          curl -sL -o /tmp/magisk/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          unzip -j -o /tmp/magisk/magisk.apk "lib/x86_64/libmagiskboot.so" -d /tmp/magisk/ 2>/dev/null || \
+            unzip -j -o /tmp/magisk/magisk.apk "lib/x86/libmagiskboot.so" -d /tmp/magisk/
+          mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot && chmod +x /tmp/magisk/magiskboot
+        fi
+        MB=/tmp/magisk/magiskboot
+
+        WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
+        mkdir -p "$WORK/check"
+        (cd "$WORK/check" && $MB unpack -n "$BUILT_VB") 2>&1
+
+        # If built image already has separate recovery fragment, no patching needed
+        if [ -f "$WORK/check/vendor_ramdisk_recovery.cpio" ] || [ -f "$WORK/check/recovery.cpio" ]; then
+          echo "Built image has separate recovery — fragment approach worked. Skipping fallback."
+          rm -rf "$WORK"
+          exit 0
+        fi
+
+        # Fallback: built image has single ramdisk.cpio (combined platform+recovery)
+        echo "Built image has combined ramdisk.cpio — running fallback patcher"
+        BUILT_RAMDISK="$WORK/check/ramdisk.cpio"
+        [ -f "$BUILT_RAMDISK" ] || { echo "No ramdisk.cpio in built image"; exit 1; }
+
+        # Decompress built ramdisk to raw cpio (this IS the TWRP recovery)
+        $MB decompress "$BUILT_RAMDISK" "$WORK/built_recovery.cpio" 2>/dev/null || cp "$BUILT_RAMDISK" "$WORK/built_recovery.cpio"
+
+        # Extract stock vendor_boot
+        mkdir -p "$WORK/stock"
+        (cd "$WORK/stock" && $MB unpack -n "$STOCK_VB") 2>&1
+
+        # Find stock recovery file to overwrite
+        STOCK_RECOV_FILE=""
+        for f in "$WORK/stock/vendor_ramdisk_recovery.cpio" "$WORK/stock/vendor_ramdisk_recovery.cpio.lz4" "$WORK/stock/recovery.cpio" "$WORK/stock/recovery.cpio.lz4"; do
+          [ -f "$f" ] && { STOCK_RECOV_FILE="$f"; break; }
+        done
+        [ -n "$STOCK_RECOV_FILE" ] || { echo "No recovery ramdisk in stock"; ls -la "$WORK/stock/"; exit 1; }
+
+        # Overwrite stock recovery with TWRP recovery (lz4_legacy)
+        $MB compress=lz4_legacy "$WORK/built_recovery.cpio" "$STOCK_RECOV_FILE" || exit 1
+
+        # Repack
+        (cd "$WORK/stock" && $MB repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img") 2>&1
+
+        if [ -f "$OUTDIR/vendor_boot_patched.img" ]; then
+          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
+          echo "Fallback patcher done: $(stat -c%s "$OUTDIR/vendor_boot_patched.img") bytes"
+          cp "$OUTDIR/vendor_boot_patched.img" "$OUTDIR/vendor_boot.img"
+          echo "Replaced vendor_boot.img with patched version"
+        else
+          echo "Fallback patcher failed"
+          exit 1
+        fi
+        rm -rf "$WORK"
+
     - name: Upload to gofile.io
       if: inputs.GOFILE_UPLOAD == 'true'
       run: |
