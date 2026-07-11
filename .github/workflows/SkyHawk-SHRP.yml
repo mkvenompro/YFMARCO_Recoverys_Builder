@@ -299,7 +299,7 @@ jobs:
           elif [ -f vendor_ramdisk/ramdisk.cpio ]; then
             $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio 2>/dev/null || cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
           fi
-          [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
+          if [ -n "$RECOVERY" ]; then $MAGISKBOOT compress=gzip "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio.gz"; fi
           cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
           echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
           rm -rf "$WORK"
