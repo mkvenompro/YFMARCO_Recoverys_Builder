@@ -18,9 +18,8 @@ env:
   LDCHECKPATH: "system/bin/qseecomd"
   RUN_BUILD: "false"
 
-# Only build on PRs or when RUN_BUILD=true (set via UI rerun), so we don't
-# waste the free monthly compute credits on every push.
-only_if: $CIRRUS_PR != '' || $RUN_BUILD == 'true'
+# Build on push to main, on PRs, or when RUN_BUILD=true (UI rerun override).
+only_if: $CIRRUS_BRANCH == 'main' || $CIRRUS_PR != '' || $RUN_BUILD == 'true'
 
 task:
   name: TWRP Build ($DEVICE_TREE_BRANCH / $BUILD_TARGET)
