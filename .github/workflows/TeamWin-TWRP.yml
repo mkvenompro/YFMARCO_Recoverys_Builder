@@ -209,16 +209,29 @@ jobs:
           exit 1
         fi
 
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ccache-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_TREE_BRANCH }}-${{ github.run_id }}
+        restore-keys: |
+          ccache-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_TREE_BRANCH }}-
+
     - name: Building Image 
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
+        export USE_CCACHE=1
+        export CCACHE_DIR=$HOME/.ccache
+        export CCACHE_MAXSIZE=6G
+        ccache -z
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
             lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
         else
             lunch ${{ env.DEVICE_MAKEFILE }}-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
         fi
+        echo "ccache stats:"; ccache -s
 
     - name: Find built images
       id: find_imgs
