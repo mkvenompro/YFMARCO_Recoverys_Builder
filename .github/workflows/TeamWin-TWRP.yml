@@ -153,7 +153,23 @@ jobs:
         cd android-recovery
         rm -rf external/scrypt
         git clone --depth=1 https://android.googlesource.com/platform/external/scrypt external/scrypt
-      
+
+    - name: Link libcrypto_scrypt into recovery (twrp-12.1 crypto fix)
+      if: inputs.MANIFEST_BRANCH == 'twrp-12.1'
+      run: |
+        set -e
+        cd android-recovery
+        # TWRP's recovery module references crypto_scrypt() but never links
+        # libcrypto_scrypt, so the binary fails at load time with
+        # "cannot locate symbol crypto_scrypt". Patch it into the
+        # TW_INCLUDE_CRYPTO shared-libs block.
+        if grep -q 'LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl' bootable/recovery/Android.mk; then
+          sed -i '/LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl/a\    LOCAL_SHARED_LIBRARIES += libcrypto_scrypt' bootable/recovery/Android.mk
+          echo "Patched recovery to link libcrypto_scrypt"
+        else
+          echo "WARN: libgatekeeper_aidl line not found, skipping crypto link patch"
+        fi
+
     - name: Clone Device Tree
       run: |
         cd android-recovery
