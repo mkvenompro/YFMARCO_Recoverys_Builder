@@ -137,32 +137,6 @@ jobs:
         cd android-recovery
         repo sync -j$(nproc --all) --force-sync
 
-    - name: Apply TWRP 12.1 decryption patches (fscrypt / keystore2)
-      if: inputs.MANIFEST_BRANCH == 'twrp-12.1'
-      run: |
-        set -e
-        cd android-recovery
-        # 5405: fscrypt wip -> bootable/recovery
-        ( cd bootable/recovery
-          git fetch https://github.com/TeamWin/android_bootable_recovery android-12.1
-          git fetch https://gerrit.twrp.me/android_bootable_recovery refs/changes/05/5405/37
-          if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
-            git cherry-pick FETCH_HEAD
-          else
-            echo "5405 already present, skipping"
-          fi
-        )
-        # 5540: fscrypt move functionality to libvold -> system/vold
-        ( cd system/vold
-          git fetch https://github.com/TeamWin/android_system_vold android-12.1
-          git fetch https://gerrit.twrp.me/android_system_vold refs/changes/40/5540/14
-          if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
-            git cherry-pick FETCH_HEAD
-          else
-            echo "5540 already present, skipping"
-          fi
-        )
-
     - name: Ensure Guava dependency exists
       if: inputs.MANIFEST_BRANCH == 'twrp-14.1'
       run: |
