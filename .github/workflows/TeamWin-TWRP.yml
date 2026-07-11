@@ -162,13 +162,17 @@ jobs:
         # TWRP's recovery module references crypto_scrypt() but never links
         # libcrypto_scrypt, so the binary fails at load time with
         # "cannot locate symbol crypto_scrypt". Patch it into the
-        # TW_INCLUDE_CRYPTO shared-libs block.
-        if grep -q 'LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl' bootable/recovery/Android.mk; then
-          sed -i '/LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl/a\    LOCAL_SHARED_LIBRARIES += libcrypto_scrypt' bootable/recovery/Android.mk
-          echo "Patched recovery to link libcrypto_scrypt"
+        # TW_INCLUDE_CRYPTO shared-libs block. The anchor is the
+        # "libgatekeeper_aidl" continuation line inside that block
+        # (there is no "LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl" line).
+        if grep -q 'libgatekeeper_aidl' bootable/recovery/Android.mk; then
+          sed -i '/libgatekeeper_aidl/a\    LOCAL_SHARED_LIBRARIES += libcrypto_scrypt' bootable/recovery/Android.mk
+          grep -q 'libcrypto_scrypt' bootable/recovery/Android.mk && echo "Patched recovery to link libcrypto_scrypt" || echo "WARN: failed to insert libcrypto_scrypt"
         else
           echo "WARN: libgatekeeper_aidl line not found, skipping crypto link patch"
         fi
+        echo "---- recovery crypto libs ----"
+        grep -n 'crypto_scrypt' bootable/recovery/Android.mk || true
 
     - name: Clone Device Tree
       run: |
