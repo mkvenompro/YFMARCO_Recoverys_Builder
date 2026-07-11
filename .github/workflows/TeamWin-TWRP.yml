@@ -186,13 +186,22 @@ jobs:
       run: |
         sudo apt-get install python2 python-is-python2
 
-    - name: Download stock vendor_boot (for ramdisk patching)
-      if: inputs.PATCH_RAMDISK == 'true' && inputs.STOCK_VENDOR_BOOT_URL != ''
+    - name: Get stock vendor_boot (from repo root or download)
+      if: ${{ inputs.PATCH_RAMDISK }}
       run: |
-        URL="${{ inputs.STOCK_VENDOR_BOOT_URL }}"
-        mkdir -p /tmp/stock
-        aria2c -x 4 -s 4 "$URL" -d /tmp/stock -o vendor_boot.img
-        echo "STOCK_VENDOR_BOOT_PATH=/tmp/stock/vendor_boot.img" >> $GITHUB_ENV
+        if [ -f "${GITHUB_WORKSPACE}/vendor_boot.img" ]; then
+          echo "Using vendor_boot.img from repo root"
+          echo "STOCK_VENDOR_BOOT_PATH=${GITHUB_WORKSPACE}/vendor_boot.img" >> $GITHUB_ENV
+        elif [ -n "${{ inputs.STOCK_VENDOR_BOOT_URL }}" ]; then
+          URL="${{ inputs.STOCK_VENDOR_BOOT_URL }}"
+          echo "Downloading stock vendor_boot from $URL"
+          mkdir -p /tmp/stock
+          aria2c -x 4 -s 4 "$URL" -d /tmp/stock -o vendor_boot.img
+          echo "STOCK_VENDOR_BOOT_PATH=/tmp/stock/vendor_boot.img" >> $GITHUB_ENV
+        else
+          echo "No vendor_boot.img found in repo root and no STOCK_VENDOR_BOOT_URL provided. Skipping patch."
+          exit 1
+        fi
 
     - name: Building Image 
       run: |
@@ -238,7 +247,7 @@ jobs:
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
     - name: Patch vendor_boot with stock ramdisk
-      if: inputs.PATCH_RAMDISK == 'true' && env.STOCK_VENDOR_BOOT_PATH != ''
+      if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
       run: |
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
