@@ -270,7 +270,9 @@ jobs:
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
         STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
         mkdir -p /tmp/magisk
-        curl -sL -o /tmp/magisk/magiskboot https://github.com/topjohnwu/Magisk/releases/download/v27.0/magiskboot
+        curl -sL -o /tmp/magisk/Magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.0/Magisk-v28.0.apk
+        unzip -j /tmp/magisk/Magisk.apk lib/x86_64/libmagiskboot.so -d /tmp/magisk/
+        mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
         chmod +x /tmp/magisk/magiskboot
         MAGISKBOOT=/tmp/magisk/magiskboot
         BUILT_VB=""
