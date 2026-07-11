@@ -130,6 +130,12 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/external/guava external/guava
         fi
 
+    - name: Add external/scrypt for crypto support
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
+        rm -rf external/scrypt
+        git clone --depth=1 https://android.googlesource.com/platform/external/scrypt external/scrypt
+
     - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
