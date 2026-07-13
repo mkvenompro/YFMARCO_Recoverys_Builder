@@ -236,7 +236,7 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         TGT="${{ inputs.BUILD_TARGET }}"
-        if [ "$TGT" = "vendorboot" ]; then MK_TGT="vendorboot"; else MK_TGT="${TGT}image"; fi
+        if [ "$TGT" = "vendorboot" ]; then MK_TGT="out/target/product/${{ env.DEVICE_NAME }}/vendor_boot.img"; else MK_TGT="${TGT}image"; fi
         if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14.1' ]; then
             lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng && make clean && make $MK_TGT -j$(nproc --all)
         else
