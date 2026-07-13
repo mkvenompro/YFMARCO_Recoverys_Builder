@@ -303,6 +303,34 @@ jobs:
             $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio 2>/dev/null || cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
           fi
           [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
+          # ---- Inject cryptofix (FBE decryption) into the recovery ramdisk (post-build; does NOT touch the ninja graph) ----
+          CF_SRC="${GITHUB_WORKSPACE}/android-recovery/device/xiaomi/spinel/prebuilt/cryptofix"
+          if [ -d "$CF_SRC" ] && [ -n "$RECOVERY" ] && [ -f "$WORK/stock/vendor_ramdisk/recovery.cpio" ]; then
+            RD="$WORK/stock/vendor_ramdisk"
+            TMP=$(mktemp -d)
+            cp "$RD/recovery.cpio" "$TMP/rec.cpio"
+            DEC="$TMP/rec.cpio"
+            if lz4 -t "$DEC" >/dev/null 2>&1; then lz4 -d "$DEC" "$TMP/rec_dec.cpio" >/dev/null 2>&1 && DEC="$TMP/rec_dec.cpio"; fi
+            if gunzip -t "$DEC" >/dev/null 2>&1; then gunzip -c "$DEC" > "$TMP/rec_dec.cpio" 2>/dev/null && DEC="$TMP/rec_dec.cpio"; fi
+            mkdir -p "$TMP/ext"
+            if ( cd "$TMP/ext" && cpio -id < "$DEC" ) >/dev/null 2>&1 && [ -f "$TMP/ext/init.recovery.mt6789.rc" ]; then
+              mkdir -p "$TMP/ext/sbin/cryptofix"
+              cp "$CF_SRC"/*.so "$TMP/ext/sbin/cryptofix/" 2>/dev/null
+              cp "$CF_SRC/init.recovery.mt6789.rc" "$TMP/ext/init.recovery.mt6789.rc"
+              cp "$CF_SRC/mount_vendor.sh" "$TMP/ext/sbin/mount_vendor.sh"
+              ( cd "$TMP/ext" && find . -print0 | cpio --null -o --format=newc > "$TMP/rec_new.cpio" ) >/dev/null 2>&1
+              if [ -s "$TMP/rec_new.cpio" ]; then
+                cp "$TMP/rec_new.cpio" "$RD/recovery.cpio"
+                rm -f "$RD/recovery.cpio.gz" "$RD/recovery.cpio.lz4"
+                echo "cryptofix: injected FBE fix into recovery ramdisk"
+              else
+                echo "cryptofix: repack failed, keeping original ramdisk"
+              fi
+            else
+              echo "cryptofix: extract failed, keeping original ramdisk"
+            fi
+            rm -rf "$TMP"
+          fi
           cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
           echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
           rm -rf "$WORK"
