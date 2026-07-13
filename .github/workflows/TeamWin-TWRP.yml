@@ -126,6 +126,7 @@ jobs:
 
     - name: Initialize Repo
       run: |
+        rm -rf android-recovery
         mkdir android-recovery
         cd android-recovery
         git config --global user.name "${{ github.actor }}"
