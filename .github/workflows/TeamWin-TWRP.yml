@@ -149,32 +149,6 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/external/guava external/guava
         fi
       
-    - name: Add external/scrypt for crypto support
-      run: |
-        cd android-recovery
-        rm -rf external/scrypt
-        git clone --depth=1 https://android.googlesource.com/platform/external/scrypt external/scrypt
-
-    - name: Link libcrypto_scrypt into recovery (twrp-12.1 crypto fix)
-      if: inputs.MANIFEST_BRANCH == 'twrp-12.1'
-      run: |
-        set -e
-        cd android-recovery
-        # TWRP's recovery module references crypto_scrypt() but never links
-        # libcrypto_scrypt, so the binary fails at load time with
-        # "cannot locate symbol crypto_scrypt". Patch it into the
-        # TW_INCLUDE_CRYPTO shared-libs block. The anchor is the
-        # "libgatekeeper_aidl" continuation line inside that block
-        # (there is no "LOCAL_SHARED_LIBRARIES += libgatekeeper_aidl" line).
-        if grep -q 'libgatekeeper_aidl' bootable/recovery/Android.mk; then
-          sed -i '/libgatekeeper_aidl/a\    LOCAL_SHARED_LIBRARIES += libcrypto_scrypt' bootable/recovery/Android.mk
-          grep -q 'libcrypto_scrypt' bootable/recovery/Android.mk && echo "Patched recovery to link libcrypto_scrypt" || echo "WARN: failed to insert libcrypto_scrypt"
-        else
-          echo "WARN: libgatekeeper_aidl line not found, skipping crypto link patch"
-        fi
-        echo "---- recovery crypto libs ----"
-        grep -n 'crypto_scrypt' bootable/recovery/Android.mk || true
-
     - name: Clone Device Tree
       run: |
         cd android-recovery
@@ -207,6 +181,16 @@ jobs:
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
         RAMDISK_PATH="${GITHUB_WORKSPACE}/android-recovery/${DEVICE_DIRECTORY}/${DEVICE_NAME}/prebuilt/platform_ramdisk.cpio.lz4"
         echo "STOCK_RAMDISK_PATH=${RAMDISK_PATH}" >> $GITHUB_ENV
+
+    - name: Apply device-tree TWRP source patches (if any)
+      run: |
+        cd android-recovery
+        if [ -f "$DEVICE_DIRECTORY/$DEVICE_NAME/patches/apply_patches.sh" ]; then
+          echo "Applying device-tree patches from $DEVICE_DIRECTORY/$DEVICE_NAME/patches/apply_patches.sh"
+          bash "$DEVICE_DIRECTORY/$DEVICE_NAME/patches/apply_patches.sh"
+        else
+          echo "No device-tree patches to apply."
+        fi
 
     - name: Installing python2 for legacy builds
       if: env.CHECK_LEGACY_BRANCH == 'true'
