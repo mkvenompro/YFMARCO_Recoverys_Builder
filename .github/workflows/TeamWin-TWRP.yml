@@ -234,15 +234,13 @@ jobs:
       with:
         path: ~/.ccache
         key: ccache-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_TREE_BRANCH }}-${{ github.run_id }}
-        restore-keys: |
-          ccache-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_TREE_BRANCH }}-
 
     - name: Building Image 
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        export USE_CCACHE=1
+        export USE_CCACHE=0
         export CCACHE_DIR=$HOME/.ccache
         export CCACHE_MAXSIZE=6G
         ccache -z
