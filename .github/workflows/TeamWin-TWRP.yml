@@ -304,7 +304,7 @@ jobs:
           fi
           [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
           # ---- Inject cryptofix (FBE decryption) into the recovery ramdisk (post-build; does NOT touch the ninja graph) ----
-          CF_SRC="${GITHUB_WORKSPACE}/android-recovery/device/xiaomi/spinel/prebuilt/cryptofix"
+          CF_SRC="${GITHUB_WORKSPACE}/cryptofix"
           if [ -d "$CF_SRC" ] && [ -n "$RECOVERY" ] && [ -f "$WORK/stock/vendor_ramdisk/recovery.cpio" ]; then
             RD="$WORK/stock/vendor_ramdisk"
             TMP=$(mktemp -d)
