@@ -275,34 +275,43 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Patch vendor_boot (inject FBE cryptofix)
+    - name: Patch vendor_boot with stock ramdisk
       if: ${{ inputs.PATCH_RAMDISK && env.STOCK_VENDOR_BOOT_PATH != '' }}
       run: |
         OUTDIR=${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}
+        STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
+        STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
         mkdir -p /tmp/magisk
         curl -sL -o /tmp/magisk/Magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.0/Magisk-v28.0.apk
         unzip -j /tmp/magisk/Magisk.apk lib/x86_64/libmagiskboot.so -d /tmp/magisk/
         mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
         chmod +x /tmp/magisk/magiskboot
         MAGISKBOOT=/tmp/magisk/magiskboot
-        BUILT_VB="$OUTDIR/vendor_boot.img"
-        CF_SRC="${GITHUB_WORKSPACE}/cryptofix"
-        # spinel's vendor_boot partition is exactly 64 MiB and the committed stock
-        # vendor_boot.img already fills it, so (stock platform + TWRP recovery)
-        # cannot fit once cryptofix is added (overflows by ~432 KiB). Use the BUILT
-        # TWRP vendor_boot (already bundles the recovery ramdisk, ~33 MiB) as the
-        # repack base and just inject cryptofix -> result stays well under 64 MiB.
-        if [ -f "$BUILT_VB" ] && [ -d "$CF_SRC" ]; then
+        BUILT_VB=""
+        for f in "$OUTDIR/vendor_boot.img" "$OUTDIR/recovery.img"; do
+          [ -f "$f" ] && { BUILT_VB="$f"; break; }
+        done
+        if [ -f "$STOCK_VB" ] && [ -f "$STOCK_RAMDISK" ] && [ -n "$BUILT_VB" ]; then
           WORK=$(mktemp -d /tmp/vb_patch_XXXXXX)
-          cd "$WORK" && $MAGISKBOOT unpack "$BUILT_VB" 2>&1
+          mkdir -p "$WORK/built" "$WORK/stock"
+          cd "$WORK/built" && $MAGISKBOOT unpack "$BUILT_VB" 2>&1
           RECOVERY=""
           for f in vendor_ramdisk/recovery.cpio vendor_ramdisk/recovery.cpio.gz vendor_ramdisk/recovery.cpio.lz4; do
-            [ -f "$f" ] && { RECOVERY="$WORK/$f"; break; }
+            [ -f "$f" ] && { RECOVERY="$WORK/built/$f"; break; }
           done
-          if [ -n "$RECOVERY" ]; then
-            RD="$WORK/vendor_ramdisk"
+          cd "$WORK/stock" && $MAGISKBOOT unpack "$STOCK_VB" 2>&1
+          if [ -f vendor_ramdisk/ramdisk.cpio.lz4 ]; then
+            cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio.lz4
+          elif [ -f vendor_ramdisk/ramdisk.cpio ]; then
+            $MAGISKBOOT decompress lz4 "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio 2>/dev/null || cp "$STOCK_RAMDISK" vendor_ramdisk/ramdisk.cpio
+          fi
+          [ -n "$RECOVERY" ] && cp "$RECOVERY" "$WORK/stock/vendor_ramdisk/recovery.cpio"
+          # ---- Inject cryptofix (FBE decryption) into the recovery ramdisk (post-build; does NOT touch the ninja graph) ----
+          CF_SRC="${GITHUB_WORKSPACE}/cryptofix"
+          if [ -d "$CF_SRC" ] && [ -n "$RECOVERY" ] && [ -f "$WORK/stock/vendor_ramdisk/recovery.cpio" ]; then
+            RD="$WORK/stock/vendor_ramdisk"
             TMP=$(mktemp -d)
-            cp "$RECOVERY" "$TMP/rec.cpio"
+            cp "$RD/recovery.cpio" "$TMP/rec.cpio"
             DEC="$TMP/rec.cpio"
             if lz4 -t "$DEC" >/dev/null 2>&1; then lz4 -d "$DEC" "$TMP/rec_dec.cpio" >/dev/null 2>&1 && DEC="$TMP/rec_dec.cpio"; fi
             if gunzip -t "$DEC" >/dev/null 2>&1; then gunzip -c "$DEC" > "$TMP/rec_dec.cpio" 2>/dev/null && DEC="$TMP/rec_dec.cpio"; fi
@@ -324,18 +333,19 @@ jobs:
               echo "cryptofix: extract failed, keeping original ramdisk"
             fi
             rm -rf "$TMP"
-            cd "$WORK" && $MAGISKBOOT repack "$BUILT_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
-            # Safety cap to the 64 MiB partition in case magiskboot over-pads
-            PART=$(( 64 * 1024 * 1024 ))
-            SZ=$(stat -c %s "$OUTDIR/vendor_boot_patched.img")
-            if [ "$SZ" -gt "$PART" ]; then
-              echo "Truncating patched image $SZ -> $PART bytes"
-              truncate -s "$PART" "$OUTDIR/vendor_boot_patched.img"
-            fi
-            echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
-          else
-            echo "No recovery ramdisk found in built vendor_boot; skipping patch"
           fi
+          cd "$WORK/stock" && $MAGISKBOOT repack "$STOCK_VB" "$OUTDIR/vendor_boot_patched.img" 2>&1
+          # Safety cap: spinel vendor_boot partition is exactly 64 MiB and the
+          # committed stock vendor_boot.img already fills it; cryptofix pushes the
+          # repack ~432 KiB over. Truncate trailing padding so it fits the partition.
+          # (Only triggers when the image overflows; remove if you trim the tree instead.)
+          PART=$(( 64 * 1024 * 1024 ))
+          SZ=$(stat -c %s "$OUTDIR/vendor_boot_patched.img")
+          if [ "$SZ" -gt "$PART" ]; then
+            echo "Truncating patched image $SZ -> $PART bytes"
+            truncate -s "$PART" "$OUTDIR/vendor_boot_patched.img"
+          fi
+          echo "PATCHED_VB=$OUTDIR/vendor_boot_patched.img" >> $GITHUB_ENV
           rm -rf "$WORK"
         fi
 
