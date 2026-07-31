@@ -250,15 +250,12 @@ jobs:
         OUTDIR=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}
         STOCK_VB="${{ env.STOCK_VENDOR_BOOT_PATH }}"
         STOCK_RAMDISK="${{ env.STOCK_RAMDISK_PATH }}"
-        MAGISKBOOT=$(find ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }} -name "magiskboot" -type f 2>/dev/null | head -1)
-        if [ -z "$MAGISKBOOT" ]; then
-          mkdir -p /tmp/magisk
-          curl -sL -o /tmp/magisk/Magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.0/Magisk-v28.0.apk
+        mkdir -p /tmp/magisk
+        curl -sL -o /tmp/magisk/Magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.0/Magisk-v28.0.apk
         unzip -j /tmp/magisk/Magisk.apk lib/x86_64/libmagiskboot.so -d /tmp/magisk/
         mv /tmp/magisk/libmagiskboot.so /tmp/magisk/magiskboot
-          chmod +x /tmp/magisk/magiskboot
-          MAGISKBOOT=/tmp/magisk/magiskboot
-        fi
+        chmod +x /tmp/magisk/magiskboot
+        MAGISKBOOT=/tmp/magisk/magiskboot
         BUILT_VB=""
         for f in "$OUTDIR/OrangeFox-"*.img "$OUTDIR/vendor_boot.img"; do
           [ -f "$f" ] && { BUILT_VB="$f"; break; }
